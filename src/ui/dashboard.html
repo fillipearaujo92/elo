@@ -1,0 +1,1268 @@
+<!doctype html>
+<html lang="pt-BR" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Elo — gateway</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cg fill='none' stroke='%234ADE80' stroke-width='3.4' stroke-linecap='round'%3E%3Ccircle cx='12' cy='16' r='7.2'/%3E%3Cpath d='M19.6 9.6a7.2 7.2 0 0 1 0 12.8'/%3E%3Cpath d='M17.2 22.9a7.2 7.2 0 0 1-2.4-1.3'/%3E%3C/g%3E%3C/svg%3E">
+<style>
+/* ═══════════════════════════════════════════════════════════════════════════
+   ELO — painel do gateway WhatsApp. Identidade própria, sem o DS do Sysled.
+   Painel de instrumentos: monoespaçada como face principal, UM acento
+   (verde-sinal) reservado ao que está vivo, estado por tipografia e posição
+   em vez de semáforo de cores, linhas finas no lugar de cards.
+   ═══════════════════════════════════════════════════════════════════════════ */
+:root{
+  --ink:#0E1012; --ink-2:#171A1E; --ink-3:#1F242A;
+  --line:#2E343A; --line-2:#20252A;
+  /* Escala MEDIDA contra a tinta (#0E1012): t1 17:1, t2 9.7:1, t3 6:1, t4 3.6:1.
+     A versao anterior tinha t4 em 1.8:1 — labels e tabs ficavam ilegiveis. */
+  --t1:#F0F2F4; --t2:#B4BAC1; --t3:#8A9199; --t4:#666D75;
+  --sig:#4ADE80; --sig-dim:rgba(74,222,128,.11);
+  --amb:#D4A24C; --red:#D9605A;
+  --mono:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;
+}
+:root[data-theme="light"]{
+  --ink:#FAFAF9; --ink-2:#F1F1EF; --ink-3:#E7E7E4;
+  --line:#D2D2CE; --line-2:#E4E4E1;
+  --t1:#16181A; --t2:#4A4E53; --t3:#6E7378; --t4:#8B9095;
+  --sig:#12A150; --sig-dim:rgba(18,161,80,.09);
+  --amb:#9A6B14; --red:#B4322C;
+}
+*{box-sizing:border-box}
+html{font-size:13px}
+body{margin:0;background:var(--ink);color:var(--t1);font-family:var(--mono);font-size:13px;
+  line-height:1.5;font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased;
+  height:100vh;overflow:hidden}
+h1,h2,h3,p{margin:0;font-weight:400}
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--line);border:3px solid var(--ink)}
+::-webkit-scrollbar-thumb:hover{background:var(--t4)}
+*:focus-visible{outline:1px solid var(--sig);outline-offset:2px}
+a{color:inherit;text-decoration:none}
+
+.app{display:flex;flex-direction:column;height:100vh;overflow:hidden}
+
+/* ── Topo: uma linha de texto, sem rail nem ícones ─────────────────────── */
+.tb{display:flex;align-items:baseline;gap:14px;padding:18px 22px 16px;flex-shrink:0;
+  flex-wrap:wrap;border-bottom:1px solid var(--line)}
+.tb-id{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--t1);
+  letter-spacing:.22em;text-transform:uppercase;cursor:default;user-select:none;
+  align-self:center}
+.tb-id .mk{color:var(--sig);flex-shrink:0}
+.tb-id span{font-weight:500}
+.tb-nav{display:flex;gap:0;font-size:11px}
+.tb-nav button{background:none;border:none;border-bottom:1px solid transparent;color:var(--t2);
+  padding:3px 11px;letter-spacing:.06em;text-transform:uppercase;cursor:pointer;
+  font-family:inherit;font-size:11px;position:relative}
+.tb-nav button:hover{color:var(--t2)}
+.tb-nav button.on{color:var(--t1);border-bottom-color:var(--sig)}
+.tb-n{position:absolute;top:-3px;right:1px;font-size:9px;color:var(--red);letter-spacing:0}
+.tb-sp{flex:1}
+.tb-a{font-size:11px;color:var(--t2);letter-spacing:.06em;text-transform:uppercase;
+  border:1px solid var(--line);padding:5px 11px;background:none;cursor:pointer;font-family:inherit}
+.tb-a:hover{color:var(--t1);border-color:var(--t4)}
+.tb-a.k{color:var(--t1);border-color:var(--t4)}
+.tb-lv{display:flex;align-items:center;gap:6px;font-size:10px;color:var(--t3);
+  letter-spacing:.1em;text-transform:uppercase}
+.tb-lv::before{content:'';width:5px;height:5px;border-radius:50%;background:var(--sig)}
+.tb-lv.off{color:var(--t4)}
+.tb-lv.off::before{background:var(--red)}
+.tb-sr{display:flex;align-items:center;border:1px solid var(--line);height:27px;padding:0 9px}
+.tb-sr:focus-within{border-color:var(--t4)}
+.tb-sr input{background:none;border:none;outline:none;color:var(--t1);font-family:inherit;
+  font-size:11px;width:118px;letter-spacing:.03em}
+.tb-sr input::placeholder{color:var(--t4);letter-spacing:.06em;text-transform:uppercase}
+
+.bd{flex:1;overflow-y:auto;min-height:0}
+
+/* ── Régua de sinal: números grandes, separados por filete ─────────────── */
+.sig{display:flex;padding:22px 22px 19px;border-bottom:1px solid var(--line);
+  flex-wrap:wrap;gap:0 0}
+.sg{padding-right:32px;margin-right:32px;border-right:1px solid var(--line-2);cursor:pointer}
+.sg:last-child{border-right:none;padding-right:0;margin-right:0;cursor:default}
+.sg:hover .sg-l{color:var(--t2)}
+.sg.on .sg-l{color:var(--t1)}
+.sg.on .sg-v{text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:5px}
+.sg-v{font-size:29px;line-height:1;letter-spacing:-.03em}
+.sg-v.a{color:var(--sig)} .sg-v.w{color:var(--amb)}
+.sg-v.e{color:var(--red)} .sg-v.z{color:var(--t4)}
+.sg-l{font-size:10px;color:var(--t2);letter-spacing:.14em;text-transform:uppercase;margin-top:9px}
+
+/* ── Lista de sessões: linha fina, marcador em traço ───────────────────── */
+.hd{display:grid;grid-template-columns:26px minmax(0,1fr) 150px 112px 88px 112px;gap:20px;
+  padding:12px 22px;border-bottom:1px solid var(--line);align-items:center}
+.hd span,.rw>*{min-width:0;overflow:hidden}
+.hd span{font-size:10px;color:var(--t3);letter-spacing:.14em;text-transform:uppercase;
+  white-space:nowrap;text-overflow:ellipsis}
+.hd span.r{text-align:right}
+.hd span.s{cursor:pointer;user-select:none}
+.hd span.s:hover{color:var(--t2)}
+.hd span.s.on{color:var(--t1)}
+.rw{display:grid;grid-template-columns:26px minmax(0,1fr) 150px 112px 88px 112px;gap:20px;
+  padding:14px 22px;border-bottom:1px solid var(--line-2);align-items:center;cursor:pointer}
+.rw:hover{background:var(--ink-2)}
+.rw-i{font-size:11px;color:var(--t3);display:flex;align-items:center;gap:7px}
+.rw-i::before{content:'';width:2px;height:15px;background:var(--m);flex-shrink:0}
+.rw-n{min-width:0}
+.rw-n b{display:block;font-size:13.5px;color:var(--t1);font-weight:500;letter-spacing:-.005em;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rw-n i{display:block;font-style:normal;font-size:10.5px;color:var(--t3);margin-top:3px}
+.rw-p{font-size:12px;color:var(--t2);white-space:nowrap}
+.rw-p.no{color:var(--t4)}
+.rw-s{font-size:11px;letter-spacing:.05em;text-transform:uppercase;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.rw-s.a{color:var(--sig)} .rw-s.w{color:var(--amb)}
+.rw-s.e{color:var(--red)} .rw-s.z{color:var(--t3)}
+.rw-m{font-size:12px;color:var(--t2);text-align:right;min-width:0;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.rw-m em{font-style:normal;color:var(--t3);font-size:10.5px}
+.rw-b{display:flex;gap:4px;justify-content:flex-end;flex-wrap:nowrap;overflow:hidden}
+.rw-b button{width:29px;height:29px;display:flex;align-items:center;justify-content:center;
+  color:var(--t3);border:1px solid transparent;background:none;cursor:pointer;
+  flex-shrink:0;padding:0}
+.rw-b button:hover:not(:disabled){background:var(--ink-3)}
+.rw-b button:hover:not(:disabled){color:var(--t1);border-color:var(--line)}
+.rw-b button.k{color:var(--sig)}
+.rw-b button.d:hover:not(:disabled){color:var(--red)}
+.rw-b button:disabled{opacity:.3;cursor:not-allowed}
+
+/* ── Log: colunas alinhadas, sem trilho ────────────────────────────────── */
+.lf{display:flex;padding:16px 22px 14px;border-bottom:1px solid var(--line);
+  flex-wrap:wrap;align-items:center;gap:3px}
+.lf button{font-size:10.5px;color:var(--t3);padding:5px 11px;letter-spacing:.1em;
+  text-transform:uppercase;background:none;border:1px solid transparent;cursor:pointer;
+  font-family:inherit}
+.lf button:hover{color:var(--t1);border-color:var(--line)}
+.lf button.on{color:var(--ink);background:var(--t2);border-color:var(--t2);font-weight:500}
+.lf em{margin-left:auto;font-style:normal;font-size:10.5px;color:var(--t3);letter-spacing:.06em}
+.ln{display:grid;grid-template-columns:66px 82px 1fr 122px;gap:14px;padding:7px 22px;
+  border-bottom:1px solid var(--line-2);align-items:baseline;font-size:12px}
+.ln:hover{background:var(--ink-2)}
+.ln-t{color:var(--t3);font-size:11px}
+.ln-k{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--t2);font-weight:500}
+.ln-k.in{color:var(--sig)} .ln-k.out{color:var(--t2)}
+.ln-k.er{color:var(--red)} .ln-k.wr{color:var(--amb)}
+.ln-m{color:var(--t1);min-width:0;word-break:break-word}
+.ln-m u{display:block;text-decoration:none;color:var(--t3);font-size:10.5px;margin-top:3px;
+  word-break:break-all;line-height:1.55}
+.ln-s{color:var(--t3);font-size:10.5px;text-align:right;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.ln.error .ln-m{color:var(--red)}
+.ln.warn .ln-m{color:var(--amb)}
+
+/* ── Overlay / painel lateral ──────────────────────────────────────────── */
+.ov{position:fixed;inset:0;background:rgba(0,0,0,.72);display:flex;align-items:center;
+  justify-content:center;z-index:500;padding:18px;animation:fi .14s ease}
+@keyframes fi{from{opacity:0}to{opacity:1}}
+.md{width:100%;max-width:460px;background:var(--ink);border:1px solid var(--line);
+  max-height:88vh;display:flex;flex-direction:column;overflow:hidden;animation:up .18s ease}
+.md.lg{max-width:680px}
+@keyframes up{from{transform:translateY(8px);opacity:0}to{transform:none;opacity:1}}
+.md-h{display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--line);
+  flex-shrink:0}
+.md-h b{font-size:11px;color:var(--t2);letter-spacing:.16em;text-transform:uppercase;font-weight:400}
+.md-h .sp{flex:1}
+.md-h button{background:none;border:none;color:var(--t4);cursor:pointer;font-family:inherit;
+  font-size:11px;letter-spacing:.06em;text-transform:uppercase;padding:2px 6px}
+.md-h button:hover{color:var(--t1)}
+.md-b{padding:20px;overflow-y:auto;flex:1}
+.md-a{display:flex;gap:0;padding:14px 20px;border-top:1px solid var(--line);flex-shrink:0}
+.md-a .sp{flex:1}
+.md-a button{font-size:11px;color:var(--t2);padding:5px 13px;letter-spacing:.1em;
+  text-transform:uppercase;border:1px solid transparent;background:none;cursor:pointer;font-family:inherit}
+.md-a button:hover{color:var(--t1);border-color:var(--line)}
+.md-a button.k{color:var(--ink);background:var(--sig);border-color:var(--sig)}
+.md-a button.k:hover{opacity:.88;color:var(--ink)}
+.md-a button.d:hover{color:var(--red);border-color:var(--red)}
+
+/* Campos: só régua inferior; o acento aparece no foco */
+.fd{margin-bottom:22px}
+.fd label{display:block;font-size:10px;color:var(--t3);letter-spacing:.14em;
+  text-transform:uppercase;margin-bottom:9px}
+.fd input{width:100%;background:var(--ink-2);border:1px solid var(--line);
+  border-bottom-width:2px;color:var(--t1);font-family:inherit;font-size:15px;
+  padding:9px 11px;outline:none;letter-spacing:-.005em}
+.fd input:hover{border-color:var(--t4)}
+.fd input:focus{border-color:var(--t4);border-bottom-color:var(--sig);background:var(--ink-3)}
+.fd input::placeholder{color:var(--t4);font-size:13px}
+.fd-p{display:flex;align-items:baseline;gap:10px;margin-top:11px;font-size:11.5px}
+.fd-p b{font-size:10px;color:var(--t3);letter-spacing:.14em;text-transform:uppercase;font-weight:400}
+.fd-p i{font-style:normal;color:var(--sig)}
+.fd-h{font-size:11px;color:var(--t3);margin-top:9px;line-height:1.65}
+.fd-e{font-size:11px;color:var(--red);margin-top:9px;min-height:15px}
+
+/* Detalhe */
+.sec{font-size:10px;color:var(--t3);letter-spacing:.14em;text-transform:uppercase;
+  margin:0 0 10px;padding-bottom:6px;border-bottom:1px solid var(--line-2)}
+/* Pares em DUAS colunas: a versão anterior empilhava tudo e deixava metade da
+   largura vazia. Cada par ocupa uma célula, com o rótulo acima do valor. */
+.dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));
+  gap:13px 20px;font-size:12px}
+.dl>div{min-width:0}
+.dl dt{color:var(--t3);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;
+  white-space:nowrap;margin-bottom:3px}
+.dl dd{margin:0;color:var(--t1);word-break:break-word;line-height:1.4}
+/* Par que precisa da linha inteira (URL, lista de eventos). */
+.dl .wide{grid-column:1/-1}
+/* Blocos do modal. "atividade" (3 números) é bem mais baixo que "webhook"
+   (4 campos), então lado a lado deixava a esquerda oca. Empilhados, cada um
+   ocupa a largura inteira e o vazio desaparece. */
+.blk{min-width:0;margin-bottom:20px}
+/* Atividade em régua horizontal: os 3 números usam toda a largura. */
+.mn{display:flex;gap:0}
+.mn-c{flex:1;min-width:0;padding-right:18px;margin-right:18px;
+  border-right:1px solid var(--line-2)}
+.mn-c:last-child{border-right:none;padding-right:0;margin-right:0}
+.mn-v{font-size:23px;line-height:1;letter-spacing:-.02em}
+.mn-l{font-size:9.5px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;margin-top:6px}
+/* Linha do teste de destino: altura RESERVADA, então o modal não salta quando o
+   resultado chega. Antes o <span> nascia vazio e tudo se deslocava. */
+/* Interruptor: quadrado, com o traço do acento quando ligado — coerente com a
+   linguagem de traços do painel, em vez de uma pílula arredondada genérica. */
+.sw{display:flex;align-items:center;gap:11px;cursor:pointer;user-select:none;padding:3px 0}
+.sw input{position:absolute;opacity:0;width:0;height:0}
+.sw-b{width:34px;height:18px;border:1px solid var(--line);background:var(--ink-2);
+  position:relative;flex-shrink:0;transition:border-color .15s,background .15s}
+.sw-b::after{content:'';position:absolute;top:2px;left:2px;width:12px;height:12px;
+  background:var(--t4);transition:transform .18s var(--ease),background .15s}
+.sw input:checked+.sw-b{border-color:var(--sig);background:var(--sig-dim)}
+.sw input:checked+.sw-b::after{transform:translateX(16px);background:var(--sig)}
+.sw input:focus-visible+.sw-b{outline:1px solid var(--sig);outline-offset:2px}
+.sw-t{font-size:12px;color:var(--t1)}
+.sw-t u{display:block;text-decoration:none;font-size:10.5px;color:var(--t3);margin-top:2px}
+/* Filtros de chat: grade 2x2, cada um com rótulo e explicação curta. */
+.flt{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+@media(max-width:520px){.flt{grid-template-columns:1fr}}
+/* Stepper: campo numérico estreito com passo, sem as setas nativas (que somem
+   no tema escuro e mudam de tamanho entre navegadores). */
+.stp{display:flex;align-items:stretch;border:1px solid var(--line);width:max-content}
+.stp button{width:26px;background:var(--ink-2);border:none;color:var(--t2);
+  cursor:pointer;font-size:14px;line-height:1;padding:0;font-family:var(--mono)}
+.stp button:hover{background:var(--ink-3);color:var(--t1)}
+.stp input{width:52px;background:var(--ink);border:none;border-left:1px solid var(--line);
+  border-right:1px solid var(--line);color:var(--t1);font-family:var(--mono);
+  font-size:12px;text-align:center;padding:6px 0;-moz-appearance:textfield}
+.stp input::-webkit-outer-spin-button,.stp input::-webkit-inner-spin-button{
+  -webkit-appearance:none;margin:0}
+.stp input:focus{outline:none;background:var(--ink-3)}
+.stp-r{display:flex;gap:18px;flex-wrap:wrap}
+.stp-l{font-size:9.5px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;
+  margin-bottom:5px}
+/* Cabeçalhos extras: linhas nome/valor removíveis. */
+.hdr{display:flex;flex-direction:column;gap:6px}
+.hdr-r{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr) 26px;gap:6px}
+.hdr-r input{width:100%;background:var(--ink-2);border:1px solid var(--line);
+  color:var(--t1);font-family:var(--mono);font-size:11.5px;padding:6px 8px}
+.hdr-r input:focus{outline:none;border-color:var(--t4);background:var(--ink-3)}
+.hdr-r button{background:none;border:1px solid var(--line);color:var(--t4);
+  cursor:pointer;font-size:13px;line-height:1;padding:0}
+.hdr-r button:hover{border-color:var(--red);color:var(--red)}
+.hdr-add{align-self:flex-start;margin-top:2px}
+/* Caixas de evento: mesma linguagem, em linha. */
+.evb{display:flex;gap:7px;flex-wrap:wrap;margin-top:3px}
+.evb label{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--t2);
+  border:1px solid var(--line);padding:5px 9px;cursor:pointer;transition:.12s}
+.evb label:hover{border-color:var(--t4);color:var(--t1)}
+.evb input{position:absolute;opacity:0;width:0;height:0}
+.evb label:has(input:checked){border-color:var(--sig);color:var(--t1);background:var(--sig-dim)}
+.evb .bx{width:11px;height:11px;border:1px solid var(--t4);flex-shrink:0;position:relative}
+.evb label:has(input:checked) .bx{border-color:var(--sig);background:var(--sig)}
+.evb label:has(input:checked) .bx::after{content:'';position:absolute;inset:1.5px;
+  border-left:1.5px solid var(--ink);border-bottom:1.5px solid var(--ink);
+  transform:rotate(-45deg) translate(.5px,-1px)}
+
+.tst-row{display:flex;align-items:center;gap:13px;margin-top:14px;min-height:32px;flex-wrap:wrap}
+.tst-out{font-size:11px;min-width:0;flex:1}
+.tst-out .ph{color:var(--t4)}
+
+/* QR */
+/* Moldura de validade QUADRADA contornando o QR: o traço acompanha a forma do
+   código (um círculo cortava os cantos). O container tem 300px, o QR 250px
+   centralizado, e o retângulo passa a ~13px da borda do código. O traço "esvazia"
+   no sentido horário a partir do topo, como um cronômetro. */
+.qrw{position:relative;width:300px;height:300px;margin:0 auto}
+.qrr{position:absolute;inset:0}
+.qrr rect{fill:none;stroke-width:3}
+.qrr .bg{stroke:var(--line-2)}
+.qrr .fg{stroke:var(--sig);stroke-linecap:butt;
+  transition:stroke-dashoffset .95s linear,stroke .3s}
+.qrr .fg.urg{stroke:var(--amb)}
+.qr{position:absolute;top:25px;left:25px;width:250px;height:250px;background:#fff;
+  padding:11px;display:block}
+.qr.stale{opacity:.35;filter:grayscale(1);transition:opacity .3s,filter .3s}
+/* Estado conectado: substitui o QR por confirmação, sem o operador precisar
+   fechar e reabrir para descobrir se deu certo. */
+.qrok{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;gap:14px;background:var(--ink);animation:okin .35s ease}
+@keyframes okin{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:none}}
+.qrok svg{color:var(--sig)}
+.qrok b{font-size:13px;color:var(--t1);font-weight:500;letter-spacing:.04em}
+.qrok span{font-size:11.5px;color:var(--t3);text-align:center;line-height:1.6}
+.qrt{font-size:10.5px;color:var(--t3);text-align:center;margin-top:13px;
+  letter-spacing:.06em;text-transform:uppercase}
+.qrt b{color:var(--t2);font-weight:400;font-variant-numeric:tabular-nums}
+.qrt.urg b{color:var(--amb)}
+.qr-h{font-size:11px;color:var(--t3);text-align:center;margin-top:14px;line-height:1.7}
+.qr-h b{color:var(--t2);font-weight:400}
+
+/* Aviso flutuante */
+.ts{position:fixed;bottom:18px;left:22px;z-index:900;display:flex;flex-direction:column;gap:7px}
+.tsi{display:flex;align-items:baseline;gap:10px;padding:10px 14px;background:var(--ink-2);
+  border:1px solid var(--line);border-left:2px solid var(--sig);font-size:11.5px;
+  animation:sl .2s ease;max-width:340px}
+@keyframes sl{from{transform:translateX(-8px);opacity:0}to{transform:none;opacity:1}}
+.tsi.er{border-left-color:var(--red)}
+.tsi b{font-weight:400;color:var(--t1);white-space:nowrap;font-size:10px;letter-spacing:.1em;
+  text-transform:uppercase}
+.tsi span{color:var(--t2);min-width:0;word-break:break-word}
+
+/* Vazio / carregando */
+.emp{padding:70px 22px;text-align:center}
+.emp b{display:block;font-size:13px;color:var(--t2);font-weight:400;margin-bottom:8px}
+.emp span{font-size:11.5px;color:var(--t3);line-height:1.7;display:block;max-width:44ch;margin:0 auto}
+.spn{display:inline-block;width:11px;height:11px;border:1px solid var(--line);
+  border-top-color:var(--sig);border-radius:50%;animation:sp .7s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+.spn.c{display:block;margin:60px auto}
+
+/* Entrada de chave */
+.lg{display:flex;align-items:center;justify-content:center;height:100vh;padding:20px}
+.lg-c{width:100%;max-width:330px}
+.mk-lg{color:var(--sig);display:block;margin-bottom:16px}
+.lg-i{font-size:15px;color:var(--t1);letter-spacing:.28em;text-transform:uppercase;
+  margin-bottom:5px;font-weight:500}
+.lg-s{font-size:11px;color:var(--t3);letter-spacing:.04em}
+/* Versão na entrada: sob o subtítulo, discreta, monoespaçada (é dado técnico).
+   O espaço até o formulário vive AQUI agora — saiu do .lg-s. */
+.lg-v{font-size:10px;color:var(--t4);font-family:var(--mono);letter-spacing:.06em;
+  margin-top:7px;margin-bottom:30px;min-height:12px}
+/* No cabeçalho a marca vira pilha de duas linhas: nome + versão. */
+.tb-idt{display:flex;flex-direction:column;line-height:1.05}
+.tb-v{font-size:8.5px;color:var(--t4);font-family:var(--mono);letter-spacing:.08em;
+  margin-top:2px}
+.lg-b{display:flex;margin-top:26px;border-top:1px solid var(--line);padding-top:15px}
+.lg-b button{font-size:11px;color:var(--ink);background:var(--sig);border:1px solid var(--sig);
+  padding:6px 16px;letter-spacing:.1em;text-transform:uppercase;cursor:pointer;font-family:inherit}
+.lg-b button:hover{opacity:.88}
+
+@media(max-width:800px){
+  .hd{display:none}
+  .rw{grid-template-columns:1fr auto;gap:8px 14px;padding:14px 16px}
+  .rw-i{grid-column:1/-1}
+  .rw-p,.rw-m{grid-column:1}
+  .rw-s{grid-column:2;text-align:right}
+  .rw-b{grid-column:1/-1;justify-content:flex-start;margin-top:6px}
+  .sig{gap:20px;padding:18px 16px}
+  .sg{padding-right:0;margin-right:0;border-right:none;min-width:42%}
+  .ln{grid-template-columns:1fr;gap:3px}
+  .ln-s{text-align:left}
+  .tb,.lf{padding-left:16px;padding-right:16px}
+  .ts{left:12px;right:12px;bottom:12px}
+}
+@media(prefers-reduced-motion:reduce){*{animation:none!important}}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div class="ts" id="ts"></div>
+
+<script>
+let KEY=sessionStorage.getItem('zapkey')||''
+let sess=[], stats={}, evs=[], view='sessions'
+// Versão do gateway. Vem do /health — endpoint PÚBLICO, então pode ser lida
+// antes do login (aparece já na tela da chave).
+const VER={v:null,c:null}
+function verLabel(){
+  // Commit só entra quando existe (build local não passa COMMIT_SHA).
+  return VER.c?`v${VER.v} · ${VER.c}`:`v${VER.v}`
+}
+async function loadVersion(){
+  try{
+    const r=await fetch('/health')
+    if(!r.ok)return
+    const h=await r.json()
+    VER.v=h.version||null; VER.c=h.commit||null
+    // Pinta onde já estiver renderizado (a tela pode ter carregado antes).
+    for(const id of ['lgv','tbv']){
+      const el=$(id); if(el&&VER.v)el.textContent=verLabel()
+    }
+  }catch{/* versão é informativa; falhar aqui não pode travar o painel */}
+}
+let q='', filt=null, sort={c:'name',d:1}, evFilt=new Set()
+let loading=false, timer=null, ctl=null, live=false, lastSeq=0
+
+// Ícones das ações da linha. Traço de 1.6 para casar com o peso leve do painel.
+const svg=(d,sz=15)=>`<svg width="${sz}" height="${sz}" viewBox="0 0 24 24" fill="none"
+  stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"
+  aria-hidden="true">${d}</svg>`
+const AI={
+  qr:svg('<rect x="3.5" y="3.5" width="7" height="7" rx="1"/><rect x="13.5" y="3.5" width="7" height="7" rx="1"/><rect x="3.5" y="13.5" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM19 19h2v2h-2z"/>'),
+  stop:svg('<rect x="5.5" y="5.5" width="13" height="13" rx="1.5"/>'),
+  rst:svg('<path d="M3.5 12a8.5 8.5 0 1 0 8.5-8.5 8.5 8.5 0 0 0-6.3 2.8H3.5m0-3.8v3.8h3.8"/>'),
+  del:svg('<path d="M4 6.5h16M9 6.5V4h6v2.5M6.5 6.5l1 13h9l1-13"/>'),
+}
+
+const $=i=>document.getElementById(i)
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
+const hms=t=>new Date(t).toLocaleTimeString('pt-BR',{hour12:false})
+const nf=n=>Number(n||0).toLocaleString('pt-BR')
+
+// Estado num só lugar: rótulo em português e a classe de cor contida.
+const ST={
+ WORKING:{l:'no ar',k:'a',c:'var(--sig)'},
+ STARTING:{l:'iniciando',k:'z',c:'var(--t3)'},
+ SCAN_QR_CODE:{l:'aguardando qr',k:'w',c:'var(--amb)'},
+ FAILED:{l:'com falha',k:'e',c:'var(--red)'},
+ STOPPED:{l:'parada',k:'z',c:'var(--t4)'},
+}
+const st=s=>ST[s]||ST.STOPPED
+// Telefone legível com o país explícito, para nunca parecer que falta dígito.
+//   558586479003  -> +55 85 8647-9003   (12 dig: número antigo, sem o nono)
+//   5585986479003 -> +55 85 98647-9003  (13 dig: celular com o nono)
+// Confirmado com o WhatsApp que as duas formas resolvem o MESMO chatId/LID —
+// não há dígito perdido, é o próprio número que é de 12 dígitos.
+const fone=p=>{
+  const d=String(p||'').replace(/\D/g,'')
+  if(!d)return '—'
+  const br=d.startsWith('55')&&(d.length===12||d.length===13)
+  if(!br)return '+'+d                       // fora do BR: mostra cru, sem chutar formato
+  const n=d.slice(2)
+  const loc=n.slice(2), mid=loc.length>=9?5:4
+  return `+55 ${n.slice(0,2)} ${loc.slice(0,mid)}-${loc.slice(mid)}`
+}
+
+function toast(kind,label,msg){
+  const e=document.createElement('div')
+  e.className=`tsi${kind==='er'?' er':''}`
+  e.innerHTML=`<b>${esc(label)}</b><span>${esc(msg||'')}</span>`
+  $('ts').appendChild(e); setTimeout(()=>e.remove(),4200)
+}
+async function api(p,o={}){
+  // Content-Type SÓ quando há corpo: declarar application/json num POST sem body
+  // faz o Fastify responder 400 ("Body cannot be empty when content-type is set
+  // to application/json"). Era o que quebrava as ações sem payload.
+  const h={'X-Api-Key':KEY,...(o.headers||{})}
+  if(o.body)h['Content-Type']='application/json'
+  const r=await fetch(p,{...o,headers:h})
+  if(r.status===401){logout();throw new Error('chave inválida')}
+  const b=await r.json().catch(()=>({}))
+  if(!r.ok)throw new Error(b.message||`HTTP ${r.status}`)
+  return b
+}
+
+// ── Entrada ────────────────────────────────────────────────────────────────
+function login(err){
+  document.body.style.overflow='auto'
+  $('app').innerHTML=`<div class="lg"><div class="lg-c">
+   <svg class="mk-lg" width="42" height="42" viewBox="0 0 32 32" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"><circle cx="12" cy="16" r="7.2"/><path d="M19.6 9.6a7.2 7.2 0 0 1 0 12.8"/><path d="M17.2 22.9a7.2 7.2 0 0 1-2.4-1.3"/></g></svg>
+   <div class="lg-i">ELO</div>
+   <div class="lg-s">gateway whatsapp</div>
+   <div class="lg-v" id="lgv">${VER.v?esc(verLabel()):'&nbsp;'}</div>
+   <div class="fd" style="margin:0">
+     <label for="k">chave de acesso</label>
+     <input id="k" type="password" autocomplete="current-password">
+     <div class="fd-e">${err?esc(err):''}</div>
+   </div>
+   <div class="lg-b"><button id="g">entrar</button></div>
+  </div></div>`
+  const go=async()=>{
+    KEY=$('k').value.trim(); if(!KEY)return login('informe a chave')
+    try{await api('/api/sessions');sessionStorage.setItem('zapkey',KEY);boot()}
+    catch(e){KEY='';login(e.message)}
+  }
+  $('g').onclick=go; $('k').onkeydown=e=>{if(e.key==='Enter')go()}; $('k').focus()
+}
+function logout(){
+  KEY='';sessionStorage.removeItem('zapkey')
+  if(timer)clearInterval(timer); if(ctl)ctl.abort()
+  login('sessão encerrada')
+}
+
+// ── Estrutura ──────────────────────────────────────────────────────────────
+function shell(){
+  document.body.style.overflow='hidden'
+  const dark=document.documentElement.dataset.theme!=='light'
+  const errs=evs.filter(e=>e.level==='error').length
+  $('app').innerHTML=`<div class="app">
+   <div class="tb">
+     <div class="tb-id"><svg class="mk" width="19" height="19" viewBox="0 0 32 32" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round"><circle cx="12" cy="16" r="7.2"/><path d="M19.6 9.6a7.2 7.2 0 0 1 0 12.8"/><path d="M17.2 22.9a7.2 7.2 0 0 1-2.4-1.3"/></g></svg><span class="tb-idt"><span>ELO</span><span class="tb-v" id="tbv">${
+       VER.v?esc(verLabel()):''}</span></span></div>
+     <nav class="tb-nav">
+       <button data-v="sessions" class="${view==='sessions'?'on':''}">sessões</button>
+       <button data-v="events" class="${view==='events'?'on':''}">diagnóstico${
+         errs?`<span class="tb-n">${errs>99?'99+':errs}</span>`:''}</button>
+     </nav>
+     <div class="tb-sp"></div>
+     <div class="tb-lv${live?'':' off'}" id="lv">${live?'ao vivo':'off'}</div>
+     ${view==='sessions'?`<div class="tb-sr">
+       <input id="q" placeholder="buscar" value="${esc(q)}"></div>
+       <button class="tb-a" id="rf">atualizar</button>
+       <button class="tb-a k" id="nw">+ nova</button>`
+      :`<button class="tb-a" id="cl">limpar</button>`}
+     <button class="tb-a" id="th">${dark?'claro':'escuro'}</button>
+     <button class="tb-a" id="lo">sair</button>
+   </div>
+   <div class="bd" id="bd"></div></div>`
+  document.querySelectorAll('.tb-nav button').forEach(b=>b.onclick=()=>{view=b.dataset.v;shell()})
+  $('th').onclick=theme; $('lo').onclick=logout
+  if($('rf'))$('rf').onclick=()=>load(true)
+  if($('nw'))$('nw').onclick=newSess
+  if($('cl'))$('cl').onclick=()=>{evs=[];shell()}
+  if($('q'))$('q').oninput=e=>{q=e.target.value;rows()}
+  render()
+}
+function theme(){
+  const d=document.documentElement.dataset.theme!=='light'
+  document.documentElement.dataset.theme=d?'light':'dark'
+  localStorage.setItem('zaptheme',d?'light':'dark'); shell()
+}
+function render(){ view==='sessions'?vSess():vEvs() }
+
+// ── Sessões ────────────────────────────────────────────────────────────────
+function vSess(){
+  const c={WORKING:0,SCAN_QR_CODE:0,FAILED:0,STOPPED:0,STARTING:0}
+  sess.forEach(s=>c[s.status]=(c[s.status]||0)+1)
+  const tot=Object.values(stats).reduce((a,b)=>a+(b.sent||0),0)
+  const sg=(k,lbl,cls)=>`<div class="sg${filt===k?' on':''}" data-f="${k}">
+    <div class="sg-v ${cls}">${c[k]||0}</div><div class="sg-l">${lbl}</div></div>`
+  $('bd').innerHTML=`
+   <div class="sig">
+     ${sg('WORKING','no ar','a')}${sg('SCAN_QR_CODE','aguardando qr','w')}
+     ${sg('FAILED','com falha','e')}${sg('STOPPED','paradas','z')}
+     <div class="sg"><div class="sg-v">${nf(tot)}</div><div class="sg-l">mensagens · total</div></div>
+   </div>
+   <div id="lst"></div>`
+  document.querySelectorAll('.sg[data-f]').forEach(b=>b.onclick=()=>{
+    filt=filt===b.dataset.f?null:b.dataset.f; vSess()
+  })
+  rows()
+}
+
+function rows(){
+  const l=$('lst'); if(!l)return
+  if(!sess.length){
+    l.innerHTML=`<div class="emp"><b>nenhuma sessão</b>
+      <span>Crie a primeira em <i style="font-style:normal;color:var(--sig)">+ nova</i>.
+      Use o nome que quiser — espaços, acentos e emoji são aceitos.</span></div>`
+    return
+  }
+  let list=sess.filter(s=>{
+    if(filt&&s.status!==filt)return false
+    if(!q.trim())return true
+    const t=q.toLowerCase()
+    return (s.label||s.name).toLowerCase().includes(t)||s.name.toLowerCase().includes(t)||
+      String(s.me?.id||'').includes(t)||String(s.me?.pushName||'').toLowerCase().includes(t)
+  })
+  const key=s=>({name:(s.label||s.name).toLowerCase(),status:s.status,
+    phone:String(s.me?.id||''),msgs:stats[s.name]?.sent||0}[sort.c]??'')
+  list.sort((a,b)=>{
+    const x=key(a),y=key(b)
+    return (typeof x==='number'?x-y:String(x).localeCompare(String(y),'pt-BR'))*sort.d
+  })
+  if(!list.length){
+    l.innerHTML=`<div class="emp"><b>nada encontrado</b>
+      <span>Ajuste a busca ou o filtro de estado.</span></div>`
+    return
+  }
+  const th=(c,t,r)=>`<span class="s${sort.c===c?' on':''}${r?' r':''}" data-c="${c}">${t}${
+    sort.c===c?(sort.d>0?' ↑':' ↓'):''}</span>`
+  l.innerHTML=`<div class="hd"><span></span>${th('name','sessão')}${th('phone','número')}
+    ${th('status','estado')}${th('msgs','msgs',1)}<span class="r">ações</span></div>
+   ${list.map((s,i)=>row(s,i+1)).join('')}`
+  l.querySelectorAll('.hd span.s').forEach(h=>h.onclick=()=>{
+    const c=h.dataset.c; sort=sort.c===c?{c,d:-sort.d}:{c,d:1}; rows()
+  })
+  l.querySelectorAll('.rw').forEach(r=>{
+    r.onclick=e=>{if(!e.target.closest('button'))detail(r.dataset.s)}
+  })
+  l.querySelectorAll('button[data-a]').forEach(b=>{
+    b.onclick=e=>{e.stopPropagation();act(b.dataset.a,b.closest('.rw').dataset.s,b)}
+  })
+}
+
+function row(s,n){
+  const a=st(s.status), on=s.status==='WORKING'
+  const k=stats[s.name]||{sent:0,lids:0}
+  const nm=s.label||s.name
+  const slug=s.label&&s.label!==s.name?s.name:''
+  const extra=s.reconnectAttempts?`${slug?' · ':''}${s.reconnectAttempts} reconex${s.reconnectAttempts>1?'ões':'ão'}`:''
+  const ph=s.me?.id?fone(String(s.me.id).split('@')[0]):null
+  return `<div class="rw" data-s="${esc(s.name)}" style="--m:${a.c}">
+   <div class="rw-i">${String(n).padStart(2,'0')}</div>
+   <div class="rw-n"><b title="${esc(nm)}">${esc(nm)}</b>${
+     slug||extra?`<i>${esc(slug)}${esc(extra)}</i>`:''}</div>
+   <div class="rw-p${ph?'':' no'}">${ph?esc(ph):'—'}</div>
+   <div class="rw-s ${a.k}">${a.l}</div>
+   <div class="rw-m">${nf(k.sent)}<em> / ${nf(k.lids)}</em></div>
+   <div class="rw-b">
+     ${on?`<button data-a="stop" title="Parar" aria-label="Parar">${AI.stop}</button>`
+        :`<button data-a="qr" class="k" title="Conectar" aria-label="Conectar">${AI.qr}</button>`}
+     <button data-a="restart" title="Reiniciar" aria-label="Reiniciar">${AI.rst}</button>
+     <button data-a="del" class="d" title="Remover" aria-label="Remover">${AI.del}</button>
+   </div></div>`
+}
+
+// ── Diagnóstico ────────────────────────────────────────────────────────────
+const KL={inbound:'entrada',outbound:'saída',ack:'ack',reaction:'reação',
+  session:'sessão',lid:'lid',webhook:'webhook',error:'erro',media:'mídia'}
+const KC={inbound:'in',outbound:'out',error:'er',webhook:'',ack:'',lid:'',
+  session:'',reaction:'',media:''}
+function vEvs(){
+  $('bd').innerHTML=`<div class="lf" id="lf">
+     <button data-k="" class="${evFilt.size?'':'on'}">tudo</button>
+     ${Object.keys(KL).map(k=>`<button data-k="${k}" class="${evFilt.has(k)?'on':''}">${KL[k]}</button>`).join('')}
+     <em id="en"></em>
+   </div><div id="lg"></div>`
+  $('lf').querySelectorAll('button').forEach(b=>b.onclick=()=>{
+    const k=b.dataset.k
+    if(!k)evFilt.clear(); else evFilt.has(k)?evFilt.delete(k):evFilt.add(k)
+    vEvs()
+  })
+  lg()
+}
+function lg(){
+  const b=$('lg'); if(!b)return
+  const l=evs.filter(e=>!evFilt.size||evFilt.has(e.kind)).slice(-250).reverse()
+  if($('en'))$('en').textContent=`${live?'ao vivo · ':''}${l.length} evento${l.length===1?'':'s'}`
+  if(!l.length){
+    b.innerHTML=`<div class="emp"><b>aguardando atividade</b>
+      <span>Envie ou receba uma mensagem: o fluxo aparece aqui na hora — útil para
+      descobrir por que algo não chegou.</span></div>`
+    return
+  }
+  b.innerHTML=l.map(e=>{
+    const d=e.detail?Object.entries(e.detail).filter(([,v])=>v!=null&&v!=='')
+      .map(([k,v])=>`${k} ${String(v).slice(0,46)}`).join('  ·  '):''
+    const sn=sess.find(s=>s.name===e.session)
+    return `<div class="ln ${e.level}">
+      <span class="ln-t">${hms(e.ts)}</span>
+      <span class="ln-k ${KC[e.kind]||''}">${KL[e.kind]||e.kind}</span>
+      <span class="ln-m">${esc(e.message)}${d?`<u>${esc(d)}</u>`:''}</span>
+      <span class="ln-s" title="${esc(e.session||'')}">${esc(sn?(sn.label||sn.name):(e.session||''))}</span>
+    </div>`
+  }).join('')
+}
+
+// ── Stream (fetch, não EventSource: precisamos do header X-Api-Key) ────────
+async function stream(){
+  if(ctl)ctl.abort(); ctl=new AbortController()
+  try{
+    const r=await fetch(`/api/events?after=${lastSeq}`,{headers:{'X-Api-Key':KEY},signal:ctl.signal})
+    if(!r.ok||!r.body)throw new Error(`HTTP ${r.status}`)
+    live=true; lvUp()
+    const rd=r.body.getReader(), dc=new TextDecoder(); let buf=''
+    for(;;){
+      const {done,value}=await rd.read(); if(done)break
+      buf+=dc.decode(value,{stream:true})
+      const ps=buf.split('\n\n'); buf=ps.pop()||''
+      for(const p of ps){
+        const ln=p.split('\n').find(x=>x.startsWith('data: ')); if(!ln)continue
+        try{
+          const e=JSON.parse(ln.slice(6))
+          evs.push(e); if(evs.length>600)evs.shift()
+          lastSeq=Math.max(lastSeq,e.seq)
+          if(view==='events')lg()
+          if(e.kind==='session')load()
+          if(e.level==='error')badge()
+        }catch{}
+      }
+    }
+  }catch(e){ if(e.name==='AbortError')return }
+  live=false; lvUp()
+  setTimeout(()=>{if(KEY)stream()},3000)
+}
+function lvUp(){
+  const el=$('lv'); if(!el)return
+  el.className=`tb-lv${live?'':' off'}`; el.textContent=live?'ao vivo':'off'
+  if(view==='events')lg()
+}
+function badge(){
+  const b=document.querySelector('.tb-nav button[data-v="events"]'); if(!b)return
+  const n=evs.filter(e=>e.level==='error').length
+  const ex=b.querySelector('.tb-n')
+  if(n&&!ex)b.insertAdjacentHTML('beforeend',`<span class="tb-n">${n>99?'99+':n}</span>`)
+  else if(n&&ex)ex.textContent=n>99?'99+':n
+  else if(!n&&ex)ex.remove()
+}
+
+async function load(manual){
+  if(loading)return; loading=true
+  if(manual&&$('rf'))$('rf').innerHTML='<span class="spn"></span>'
+  try{
+    const [s,k]=await Promise.all([api('/api/sessions'),api('/api/stats').catch(()=>({}))])
+    sess=s; stats=k
+    if(view==='sessions')vSess(); else lg()
+  }catch(e){toast('er','falha',e.message)}
+  finally{loading=false; if(manual&&$('rf'))$('rf').innerHTML='atualizar'}
+}
+
+// ── Ações ──────────────────────────────────────────────────────────────────
+async function act(a,name,btn){
+  if(a==='qr')return qr(name)
+  if(a==='del')return del(name)
+  const lb={start:'iniciada',restart:'reiniciada',stop:'parada'}
+  const old=btn?btn.innerHTML:null
+  if(btn){btn.disabled=true;btn.innerHTML='<span class="spn"></span>'}
+  try{
+    await api(`/api/sessions/${encodeURIComponent(name)}/${a}`,{method:'POST'})
+    const s=sess.find(x=>x.name===name)
+    toast('ok',lb[a],s?(s.label||s.name):name); setTimeout(load,1500)
+  }catch(e){toast('er','falha na ação',e.message)}
+  finally{if(btn){btn.disabled=false;btn.innerHTML=old}}
+}
+function modal(h,big){
+  const o=document.createElement('div'); o.className='ov'
+  o.innerHTML=`<div class="md${big?' lg':''}">${h}</div>`
+  o.onclick=e=>{if(e.target===o)o.remove()}
+  const k=e=>{if(e.key==='Escape'){o.remove();document.removeEventListener('keydown',k)}}
+  document.addEventListener('keydown',k); document.body.appendChild(o); return o
+}
+const nomeDe=n=>{const s=sess.find(x=>x.name===n);return s?(s.label||s.name):n}
+
+// Validade do QR do WhatsApp (~20s). Medimos que o Baileys emite um novo a cada
+// ~14s, num ritmo irregular — por isso a contagem se apoia no `issuedAt` que o
+// gateway informa, e não num cronômetro nosso.
+const QR_TTL=20
+const QR_POLL=2500
+async function qr(name){
+  const o=modal(`<div class="md-h"><b>conectar</b><span style="color:var(--t1)">${esc(nomeDe(name))}</span>
+   <div class="sp"></div><button id="x">fechar</button></div>
+   <div class="md-b"><span class="spn c"></span></div>`)
+  let closed=false, left=QR_TTL, ivTick=null, ivPoll=null, done=false
+  let lastData='', issuedAt=0
+  const stop=()=>{closed=true;if(ivTick)clearInterval(ivTick);if(ivPoll)clearInterval(ivPoll)}
+  const close=()=>{stop();o.remove()}
+  o.querySelector('#x').onclick=close
+  // Fechar pelo overlay/ESC também precisa parar os timers.
+  const mo=new MutationObserver(()=>{if(!document.body.contains(o))stop()})
+  mo.observe(document.body,{childList:true})
+
+  // Retângulo de 286x286 num viewBox de 300 (inset de 7 para o traço de 3 não
+  // vazar): perímetro = 4 lados menos o desconto dos cantos arredondados.
+  // A aproximação basta — o dasharray só precisa cobrir o traço inteiro.
+  const SIDE=286, RAD=6
+  const C=4*(SIDE-2*RAD)+2*Math.PI*RAD
+  const paint=()=>{
+    const ring=o.querySelector('.qrr .fg'); if(!ring)return
+    // Idade REAL a partir do instante de emissão informado pelo gateway.
+    const age=issuedAt?(Date.now()-issuedAt)/1000:0
+    left=Math.max(0,Math.ceil(QR_TTL-age))
+    const frac=Math.max(0,Math.min(1,(QR_TTL-age)/QR_TTL))
+    // pathLength=1000 no <rect> normaliza o perímetro, então trabalhamos em
+    // milésimos e não dependemos da precisão do cálculo geométrico.
+    ring.style.strokeDasharray='1000'
+    ring.style.strokeDashoffset=String(Math.round(1000*(1-frac)))
+    const urg=left<=5
+    ring.classList.toggle('urg',urg)
+    const t=o.querySelector('.qrt')
+    if(t){
+      t.classList.toggle('urg',urg)
+      // Passou de 12s vencido: o WhatsApp deixou de emitir (acontece apos varias
+      // rodadas sem ninguem escanear). Oferece a saida em vez de deixar um codigo
+      // morto na tela para sempre.
+      if(age>QR_TTL+12){
+        t.classList.add('urg')
+        t.innerHTML=`<b>código expirado</b> — <a href="#" id="qrrs"
+          style="color:var(--sig);text-decoration:underline">gerar novo</a>`
+        const b=t.querySelector('#qrrs')
+        if(b)b.onclick=async e=>{
+          e.preventDefault(); stop()
+          o.querySelector('.md-b').innerHTML='<span class="spn c"></span>'
+          try{
+            await api(`/api/sessions/${encodeURIComponent(name)}/restart`,{method:'POST'})
+            setTimeout(()=>{o.remove();qr(name)},2600)
+          }catch(err){toast('er','falha ao reiniciar',err.message);o.remove()}
+        }
+      }else{
+        t.innerHTML=left>0
+          ?`código válido por <b>${left}s</b>`
+          :`<b>aguardando novo código…</b>`
+      }
+    }
+    const img=o.querySelector('.qr')
+    if(img)img.classList.toggle('stale',left<=0)
+  }
+
+  // Busca o QR. Só reescreve a imagem quando o código MUDOU de fato — assim a
+  // troca é visível (e o operador sabe que é um código novo), sem piscar a cada
+  // verificação.
+  const fetchQr=async()=>{
+    if(closed||done)return
+    try{
+      const r=await api(`/api/${encodeURIComponent(name)}/auth/qr`,{headers:{Accept:'application/json'}})
+      if(closed||done)return
+      const first=!o.querySelector('.qrw')
+      if(first){
+        o.querySelector('.md-b').innerHTML=`
+        <div class="qrw">
+          <svg class="qrr" viewBox="0 0 300 300" aria-hidden="true">
+            <rect class="bg" x="7" y="7" width="286" height="286" rx="6"/>
+            <rect class="fg" x="7" y="7" width="286" height="286" rx="6"
+              pathLength="1000"/>
+          </svg>
+          <img class="qr" src="data:image/png;base64,${r.data}" alt="QR code para conectar">
+        </div>
+        <p class="qrt" role="status"></p>
+        <p class="qr-h">WhatsApp → <b>Aparelhos conectados</b> → <b>Conectar aparelho</b></p>`
+      }else if(r.data!==lastData){
+        // Código novo: troca a imagem com um leve pulso, para a renovação ser
+        // perceptível em vez de silenciosa.
+        const img=o.querySelector('.qr')
+        img.src=`data:image/png;base64,${r.data}`
+        img.classList.remove('stale')
+        img.animate?.([{opacity:.45,transform:'scale(.985)'},{opacity:1,transform:'none'}],
+          {duration:260,easing:'ease-out'})
+      }
+      lastData=r.data
+      // A idade vem do gateway: `issuedAt` e o momento em que o WhatsApp emitiu.
+      issuedAt=r.issuedAt||Date.now()
+      paint()
+    }catch(e){
+      if(closed||done)return
+      o.querySelector('.md-b').innerHTML=`<p style="font-size:12px;color:var(--t2);margin:0 0 10px">${esc(e.message)}</p>
+        <p class="fd-h" style="margin:0">Sessão conectada não mostra QR.
+        Para trocar de número, use <b style="color:var(--t2);font-weight:400">reiniciar</b>.</p>`
+      stop()
+    }
+  }
+
+  // Pareou: mostra a confirmação em vez de deixar o operador adivinhando.
+  const success=(s)=>{
+    if(done)return
+    done=true; stop()
+    const ph=s?.me?.id?fone(String(s.me.id).split('@')[0]):null
+    o.querySelector('.md-b').innerHTML=`<div class="qrw"><div class="qrok">
+      <svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="10"/><path d="m7.5 12.5 3 3 6-6.5"/></svg>
+      <b>conectada</b>
+      <span>${ph?esc(ph):''}${s?.me?.pushName?`<br>${esc(s.me.pushName)}`:''}</span>
+      </div></div>
+      <p class="qrt" style="color:var(--sig)">pareamento concluído</p>`
+    toast('ok','conectada',nomeDe(name))
+    load()
+    setTimeout(()=>{if(document.body.contains(o))close()},2600)
+  }
+
+  await fetchQr()
+
+  // Tique de 1s: só repinta o anel. A renovação do código NÃO é cronometrada
+  // aqui — quem manda é o WhatsApp, e o poll abaixo detecta a troca.
+  ivTick=setInterval(paint,1000)
+
+  // Poll único: busca o QR (detecta código novo) e o status (detecta pareamento).
+  // Um só intervalo em vez de dois evita rajadas simultâneas de request.
+  ivPoll=setInterval(async()=>{
+    if(closed||done)return
+    try{
+      const st=await api(`/api/sessions/${encodeURIComponent(name)}`)
+      if(st.status==='WORKING'){success(st);return}
+      await fetchQr()
+    }catch{/* transitório: o próximo tique tenta de novo */}
+  },QR_POLL)
+}
+
+function del(name){
+  const o=modal(`<div class="md-h"><b>remover sessão</b><div class="sp"></div></div>
+   <div class="md-b"><p style="font-size:13px;margin:0 0 12px">${esc(nomeDe(name))}</p>
+   <p class="fd-h" style="margin:0">O pareamento é apagado — será preciso escanear
+   o QR novamente para reconectar.</p></div>
+   <div class="md-a"><button id="n">cancelar</button><div class="sp"></div>
+   <button id="y" class="d">remover</button></div>`)
+  o.querySelector('#n').onclick=()=>o.remove()
+  o.querySelector('#y').onclick=async()=>{
+    const nm=nomeDe(name); o.remove()
+    try{await api(`/api/sessions/${encodeURIComponent(name)}`,{method:'DELETE'})
+      toast('ok','removida',nm);load()}
+    catch(e){toast('er','falha ao remover',e.message)}
+  }
+}
+
+// ── Nova sessão: nome livre, id técnico em preview ─────────────────────────
+function slugPv(s){
+  return String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase()
+    .replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').replace(/-{2,}/g,'-')
+    .slice(0,60).replace(/-+$/,'')
+}
+function newSess(){
+  const o=modal(`<div class="md-h"><b>nova sessão</b><div class="sp"></div>
+   <button id="x">fechar</button></div>
+   <div class="md-b">
+     <div class="fd">
+       <label for="nm">nome</label>
+       <input id="nm" placeholder="Ex: Comercial — Matriz" autocomplete="off">
+       <div class="fd-p"><b>id gerado</b><i id="pv">—</i></div>
+       <p class="fd-h">Escreva como preferir — espaços, acentos, emoji.
+         O identificador técnico é derivado automaticamente.</p>
+     </div>
+     <div class="fd" style="margin-bottom:0">
+       <label for="wh">webhook · opcional</label>
+       <input id="wh" placeholder="https://…/webhook/zap" autocomplete="off">
+       <p class="fd-h">Destino das mensagens recebidas. Vazio = apenas teste de conexão.</p>
+       <div class="fd-e" id="e"></div>
+     </div>
+   </div>
+   <div class="md-a"><button id="c">cancelar</button><div class="sp"></div>
+     <button id="k" class="k">criar e conectar</button></div>`)
+  const cl=()=>o.remove()
+  o.querySelector('#x').onclick=cl; o.querySelector('#c').onclick=cl
+  const nm=o.querySelector('#nm'), pv=o.querySelector('#pv')
+  nm.oninput=()=>{
+    const s=slugPv(nm.value)
+    pv.textContent=s||(nm.value.trim()?'sessao-…':'—')
+  }
+  nm.focus()
+  o.querySelector('#k').onclick=async()=>{
+    const name=nm.value.trim(), wh=o.querySelector('#wh').value.trim()
+    const er=o.querySelector('#e')
+    if(!name){er.textContent='informe um nome';return}
+    const body={name,start:true}
+    if(wh)body.config={webhooks:[{url:wh,events:['message','message.ack','session.status'],
+      customHeaders:[{name:'X-Webhook-Key',value:KEY}],
+      retries:{attempts:15,delaySeconds:2,policy:'constant'}}]}
+    try{
+      const r=await api('/api/sessions',{method:'POST',body:JSON.stringify(body)})
+      cl(); toast('ok','criada',r.label||r.name); load()
+      setTimeout(()=>qr(r.name),2200)
+    }catch(e){er.textContent=e.message}
+  }
+}
+
+// ── Configurações da sessão ────────────────────────────────────────────────
+// Tudo que antes exigia SQL ou curl: nome, auto-start, tratamento de grupos e
+// webhook (destino, eventos e chave). O PATCH faz merge no servidor, então
+// mexer num campo não zera os outros.
+const EVT=[
+  ['message','mensagens recebidas'],
+  ['message.ack','confirmações de entrega'],
+  ['session.status','mudanças de conexão'],
+]
+// Filtros de chat. O default de `status` é IGNORAR (stories não são conversa);
+// os outros três nascem recebidos, para não mudar em silêncio o que os canais
+// ativos já entregam.
+const FLT=[
+  ['groups','grupos','mensagens de grupo',false],
+  ['status','status','stories dos contatos',true],
+  ['channels','canais','canais e newsletters',false],
+  ['broadcast','transmissões','listas de transmissão',false],
+]
+function settings(name){
+  const s=sess.find(x=>x.name===name); if(!s)return
+  const wh=s.config?.webhooks?.[0]
+  const evOn=new Set(wh?.events||EVT.map(e=>e[0]))
+  const ig=s.config?.ignore||{}
+  // undefined = usa o default do filtro (não "recebido").
+  const igOf=k=>{const d=FLT.find(f=>f[0]===k)[3]; return ig[k]===undefined?d:!!ig[k]}
+  const rt=wh?.retries||{}
+  // X-Webhook-Key tem campo próprio; os outros vão na tabela de cabeçalhos.
+  const extras=(wh?.customHeaders||[]).filter(h=>h.name!=='X-Webhook-Key')
+  const masked=(wh?.customHeaders||[]).some(h=>h.value==='••••••••')
+
+  const o=modal(`<div class="md-h"><b>configurar</b>
+   <span style="color:var(--t1)">${esc(s.label||s.name)}</span>
+   <div class="sp"></div><button id="x">fechar</button></div>
+   <div class="md-b">
+     <div class="blk">
+       <div class="sec">identificação</div>
+       <div class="fd" style="margin-bottom:0">
+         <label for="cnm">nome</label>
+         <input id="cnm" value="${esc(s.label||s.name)}" autocomplete="off">
+         <p class="fd-h">Livre — espaços, acentos, emoji. O id técnico
+           (<span style="color:var(--t2)">${esc(s.name)}</span>) não muda.</p>
+       </div>
+     </div>
+
+     <div class="blk">
+       <div class="sec">comportamento</div>
+       <label class="sw">
+         <input type="checkbox" id="cas"${s.shouldStart?' checked':''}>
+         <span class="sw-b"></span>
+         <span class="sw-t">iniciar junto com o serviço
+           <u>reconecta sozinha depois de um reinício do gateway</u></span>
+       </label>
+     </div>
+
+     <div class="blk">
+       <div class="sec">o que ignorar</div>
+       <div class="flt">
+         ${FLT.map(([k,rot,exp])=>`<label class="sw">
+           <input type="checkbox" class="cflt" data-k="${k}"${igOf(k)?' checked':''}>
+           <span class="sw-b"></span>
+           <span class="sw-t">${rot}<u>${exp}</u></span>
+         </label>`).join('')}
+       </div>
+       <p class="fd-h">Marcado = não repassa ao destino. Stories vêm ignorados
+         por padrão; grupos, canais e transmissões vêm recebidos.</p>
+     </div>
+
+     <div class="blk" style="margin-bottom:0">
+       <div class="sec">webhook</div>
+       <div class="fd">
+         <label for="cwh">destino</label>
+         <input id="cwh" value="${esc(wh?.url||'')}"
+           placeholder="https://…/webhook/zap" autocomplete="off">
+         <p class="fd-h">Para onde enviar o que chega. Em branco, o gateway
+           recebe mas não repassa.</p>
+       </div>
+       <div class="fd">
+         <label>eventos enviados</label>
+         <div class="evb">
+           ${EVT.map(([k,d])=>`<label title="${esc(d)}">
+             <input type="checkbox" class="cev" value="${k}"${evOn.has(k)?' checked':''}>
+             <span class="bx"></span>${k}</label>`).join('')}
+         </div>
+       </div>
+       <div class="fd">
+         <label for="cky">chave de autenticação</label>
+         <input id="cky" type="password" placeholder="${masked?'•••••••• (mantém a atual)':'usa a chave do gateway'}"
+           autocomplete="new-password">
+         <p class="fd-h">Vai no header <span style="color:var(--t2)">X-Webhook-Key</span>.
+           Em branco, mantém a que já está gravada.</p>
+       </div>
+       <div class="fd">
+         <label>reentrega em caso de falha</label>
+         <div class="stp-r">
+           <div>
+             <div class="stp-l">tentativas</div>
+             <div class="stp" data-stp>
+               <button type="button" data-d="-1">−</button>
+               <input id="cra" type="number" min="1" max="60" value="${rt.attempts??15}">
+               <button type="button" data-d="1">+</button>
+             </div>
+           </div>
+           <div>
+             <div class="stp-l">intervalo (s)</div>
+             <div class="stp" data-stp>
+               <button type="button" data-d="-1">−</button>
+               <input id="crd" type="number" min="0" max="300" value="${rt.delaySeconds??2}">
+               <button type="button" data-d="1">+</button>
+             </div>
+           </div>
+         </div>
+         <p class="fd-h">Se o destino estiver fora do ar (um deploy, por exemplo),
+           o evento é retentado neste ritmo antes de ser considerado perdido.</p>
+       </div>
+       <div class="fd" style="margin-bottom:0">
+         <label>cabeçalhos extras</label>
+         <div class="hdr" id="chd">
+           ${extras.map(h=>hdrRow(h.name,h.value)).join('')}
+         </div>
+         <button type="button" class="tb-a hdr-add" id="cha">+ cabeçalho</button>
+         <p class="fd-h">Além do X-Webhook-Key. Úteis quando o destino fica atrás
+           de um proxy que exige identificação própria.</p>
+       </div>
+       <div class="fd-e" id="cer"></div>
+     </div>
+   </div>
+   <div class="md-a">
+     <button id="cc">cancelar</button><div class="sp"></div>
+     <button id="cs" class="k">salvar</button>
+   </div>`,true)
+
+  const close=()=>o.remove()
+  o.querySelector('#x').onclick=close
+  o.querySelector('#cc').onclick=close
+  o.querySelector('#cnm').focus()
+
+  // Stepper: clique nos botões respeitando min/max do próprio input.
+  o.querySelectorAll('[data-stp]').forEach(w=>{
+    const inp=w.querySelector('input')
+    w.querySelectorAll('button').forEach(b=>{b.onclick=()=>{
+      const d=+b.dataset.d, min=+inp.min, max=+inp.max
+      inp.value=Math.min(max,Math.max(min,(+inp.value||0)+d))
+    }})
+  })
+
+  // Cabeçalhos extras: linhas adicionáveis/removíveis.
+  const hd=o.querySelector('#chd')
+  const wire=r=>{r.querySelector('button').onclick=()=>r.remove()}
+  hd.querySelectorAll('.hdr-r').forEach(wire)
+  o.querySelector('#cha').onclick=()=>{
+    hd.insertAdjacentHTML('beforeend',hdrRow('',''))
+    const r=hd.lastElementChild; wire(r); r.querySelector('input').focus()
+  }
+
+  o.querySelector('#cs').onclick=async()=>{
+    const er=o.querySelector('#cer')
+    const btn=o.querySelector('#cs')
+    const label=o.querySelector('#cnm').value.trim()
+    const url=o.querySelector('#cwh').value.trim()
+    const key=o.querySelector('#cky').value.trim()
+    const ev=[...o.querySelectorAll('.cev:checked')].map(c=>c.value)
+    if(!label){er.textContent='informe um nome';return}
+    if(url&&ev.length===0){er.textContent='escolha pelo menos um evento';return}
+
+    // Cabeçalhos: descarta linhas em branco (o operador abriu e não preencheu).
+    const hdrs=[...hd.querySelectorAll('.hdr-r')].map(r=>{
+      const [a,b]=r.querySelectorAll('input')
+      return {name:a.value.trim(),value:b.value}
+    }).filter(h=>h.name)
+    const bad=hdrs.find(h=>!/^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/.test(h.name))
+    if(bad){er.textContent=`cabeçalho inválido: ${bad.name}`;return}
+
+    const ignore={}
+    o.querySelectorAll('.cflt').forEach(c=>{
+      ignore['ignore'+c.dataset.k[0].toUpperCase()+c.dataset.k.slice(1)]=c.checked
+    })
+
+    btn.disabled=true; btn.innerHTML='<span class="spn"></span>'
+    try{
+      await api(`/api/sessions/${encodeURIComponent(name)}/settings`,{
+        method:'PATCH',
+        body:JSON.stringify({
+          label,
+          shouldStart:o.querySelector('#cas').checked,
+          ...ignore,
+          webhookUrl:url||null,
+          webhookEvents:ev,
+          webhookHeaders:hdrs,
+          webhookRetries:{
+            attempts:+o.querySelector('#cra').value||15,
+            delaySeconds:+o.querySelector('#crd').value||0,
+            policy:'constant',
+          },
+          ...(key?{webhookKey:key}:{}),
+        }),
+      })
+      close(); toast('ok','configuração salva',label); load()
+    }catch(e){
+      er.textContent=e.message
+      btn.disabled=false; btn.innerHTML='salvar'
+    }
+  }
+}
+
+/** Uma linha da tabela de cabeçalhos extras. */
+function hdrRow(nm,vl){
+  return `<div class="hdr-r">
+    <input placeholder="Nome" value="${esc(nm)}" autocomplete="off" spellcheck="false">
+    <input placeholder="Valor" value="${esc(vl)}" autocomplete="off" spellcheck="false">
+    <button type="button" title="remover">×</button>
+  </div>`
+}
+
+// ── Detalhe ────────────────────────────────────────────────────────────────
+function detail(name){
+  const s=sess.find(x=>x.name===name); if(!s)return
+  const k=stats[name]||{sent:0,lids:0}
+  const wh=s.config?.webhooks?.[0]
+  const a=st(s.status)
+  const ph=s.me?.id?String(s.me.id).split('@')[0]:null
+  const fmt=d=>d?new Date(d).toLocaleString('pt-BR'):'—'
+  const nm=s.label||s.name
+
+  const o=modal(`<div class="md-h"><b>sessão</b><span style="color:var(--t1)">${esc(nm)}</span>
+   <div class="sp"></div><button id="x">fechar</button></div>
+   <div class="md-b">
+     <div style="margin-bottom:20px">
+       <div class="sec">identificação</div>
+       <dl class="dl">
+         <div><dt>estado</dt><dd style="color:${a.c}">${a.l}</dd></div>
+         <div><dt>número</dt><dd>${ph?esc(fone(ph)):'<span style="color:var(--t4)">sem pareamento</span>'}</dd></div>
+         <div><dt>aparelho</dt><dd>${s.me?.pushName?esc(s.me.pushName):'<span style="color:var(--t4)">—</span>'}</dd></div>
+         <div><dt>id técnico</dt><dd>${esc(s.name)}</dd></div>
+         <div><dt>engine</dt><dd>${esc(s.engine?.engine||'—')}</dd></div>
+         <div><dt>auto-start</dt><dd>${s.shouldStart?'sim':'não'}</dd></div>
+         <div><dt>criada</dt><dd>${esc(fmt(s.createdAt))}</dd></div>
+         <div><dt>atualizada</dt><dd>${esc(fmt(s.updatedAt))}</dd></div>
+       </dl>
+     </div>
+
+     <div class="blk">
+       <div class="sec">atividade</div>
+       <div class="mn">
+         <div class="mn-c"><div class="mn-v">${nf(k.sent)}</div><div class="mn-l">mensagens</div></div>
+         <div class="mn-c"><div class="mn-v">${nf(k.lids)}</div><div class="mn-l">contatos</div></div>
+         <div class="mn-c"><div class="mn-v"${s.reconnectAttempts?' style="color:var(--amb)"':''}>${
+           s.reconnectAttempts||0}</div><div class="mn-l">reconexões</div></div>
+         <div class="mn-c"><div class="mn-v" style="color:${a.c}">${
+           s.status==='WORKING'?'on':'—'}</div><div class="mn-l">${esc(a.l)}</div></div>
+       </div>
+     </div>
+
+     <div class="blk">
+       <div class="sec">webhook</div>
+       ${wh?`<dl class="dl" style="gap:13px 20px">
+         <div class="wide"><dt>destino</dt><dd style="font-size:11px">${esc(wh.url)}</dd></div>
+         <div><dt>eventos</dt><dd style="font-size:11px">${esc((wh.events||[]).join(', ')||'todos')}</dd></div>
+         <div><dt>retry</dt><dd style="font-size:11px">${wh.retries
+           ?`${wh.retries.attempts}× a cada ${wh.retries.delaySeconds}s`:'padrão'}</dd></div>
+       </dl>
+       <div class="tst-row">
+         <button id="tw" class="tb-a">testar destino</button>
+         <span id="tr" class="tst-out"><span class="ph">verifica se o destino aceita os eventos</span></span>
+       </div>`
+       :`<p class="fd-h" style="margin:0">Sem webhook — as mensagens recebidas
+         não são repassadas a lugar nenhum.</p>`}
+     </div>
+
+     <div class="blk" style="margin-bottom:0">
+       <div class="sec">últimos eventos</div>
+       <div id="se" style="font-size:11.5px"></div>
+     </div>
+   </div>
+   <div class="md-a">
+     <button id="cf">configurar</button>
+     <button id="rs">reiniciar</button><div class="sp"></div>
+     ${s.status!=='WORKING'?`<button id="qq" class="k">conectar</button>`:''}
+   </div>`,true)
+  o.querySelector('#x').onclick=()=>o.remove()
+  o.querySelector('#rs').onclick=()=>{o.remove();act('restart',name)}
+  o.querySelector('#cf').onclick=()=>{o.remove();settings(name)}
+  const qq=o.querySelector('#qq'); if(qq)qq.onclick=()=>{o.remove();qr(name)}
+
+  const tw=o.querySelector('#tw')
+  if(tw)tw.onclick=async()=>{
+    const out=o.querySelector('#tr')
+    out.innerHTML='<span class="spn"></span>'
+    try{
+      // O teste roda NO SERVIDOR. A versão anterior fazia fetch daqui e batia em
+      // CORS ("Failed to fetch"), que parecia webhook quebrado quando era só a
+      // política de origem do navegador. Agora a chamada sai de onde os webhooks
+      // reais saem, então o resultado é confiável.
+      const r=await api(`/api/sessions/${encodeURIComponent(name)}/test-webhook`,{method:'POST'})
+      out.innerHTML=r.ok
+        ?`<span style="color:var(--sig)">entregue · http ${r.status} · ${r.ms}ms</span>`
+        :`<span style="color:var(--red)">${r.status?`http ${r.status}`:'sem resposta'}${
+            r.hint?`<u style="display:block;text-decoration:none;color:var(--t3);font-size:10.5px;margin-top:4px">${esc(r.hint)}</u>`:''}</span>`
+    }catch(e){out.innerHTML=`<span style="color:var(--red)">falhou · ${esc(e.message)}</span>`}
+  }
+
+  const se=o.querySelector('#se')
+  const mine=evs.filter(e=>e.session===name).slice(-12).reverse()
+  se.innerHTML=mine.length?mine.map(e=>{
+    const d=e.detail?Object.entries(e.detail).filter(([,v])=>v!=null&&v!=='')
+      .map(([kk,v])=>`${kk} ${String(v).slice(0,40)}`).join('  ·  '):''
+    return `<div style="display:grid;grid-template-columns:56px 72px minmax(0,1fr);gap:12px;
+      padding:6px 0;border-bottom:1px solid var(--line-2);align-items:baseline">
+      <span style="color:var(--t3);font-size:10.5px">${hms(e.ts)}</span>
+      <span class="ln-k ${KC[e.kind]||''}">${KL[e.kind]||e.kind}</span>
+      <span style="min-width:0;color:${e.level==='error'?'var(--red)':
+        e.level==='warn'?'var(--amb)':'var(--t1)'}">${esc(e.message)}${
+        d?`<span style="display:block;color:var(--t3);font-size:10px;margin-top:2px">${esc(d)}</span>`:''}</span>
+      </div>`}).join('')
+   :'<span style="color:var(--t3)">nenhum evento capturado ainda</span>'
+}
+
+function boot(){
+  shell(); load(); stream()
+  if(timer)clearInterval(timer)
+  timer=setInterval(load,15000)
+}
+document.addEventListener('keydown',e=>{
+  if(!KEY||e.target.tagName==='INPUT'||document.querySelector('.ov'))return
+  if(e.key==='r'||e.key==='R')load(true)
+  if(e.key==='1'){view='sessions';shell()}
+  if(e.key==='2'){view='events';shell()}
+  if(e.key==='n'||e.key==='N'){if(view==='sessions')newSess()}
+})
+document.documentElement.dataset.theme=localStorage.getItem('zaptheme')||'dark'
+if(KEY){boot()}else{login()}
+// Depois de pintar a tela: a versão é informativa e não deve atrasar o primeiro
+// render nem impedir o login se o /health estiver lento.
+loadVersion()
+</script>
+</body>
+</html>

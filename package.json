@@ -1,0 +1,31 @@
+{
+  "name": "@sysled/wa-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Gateway WhatsApp proprio do Sysled Chat, wire-compativel com a API do WAHA",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "dev": "node --watch --experimental-strip-types src/server.ts",
+    "test": "npm run build && node tests/run.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@hapi/boom": "^10.0.1",
+    "baileys": "^7.0.0-rc14",
+    "fastify": "^5.2.1",
+    "pg": "^8.13.1",
+    "pino": "^9.6.0",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.7",
+    "@types/pg": "^8.11.10",
+    "@types/qrcode": "^1.5.5",
+    "typescript": "^5.7.3"
+  }
+}

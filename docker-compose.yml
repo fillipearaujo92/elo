@@ -1,0 +1,64 @@
+# ELO — gateway WhatsApp. Instalação em servidor local ou VPS.
+#
+#   1. cp .env.example .env
+#   2. edite o .env (obrigatório: API_KEY e POSTGRES_PASSWORD)
+#   3. docker compose up -d
+#   4. abra http://localhost:3000 e informe a API_KEY
+#
+# Sobe dois serviços: o gateway e um Postgres próprio. O banco guarda o
+# pareamento do WhatsApp (as chaves do Signal), então reiniciar o container NÃO
+# exige escanear o QR de novo — desde que o volume `elo-db` seja preservado.
+
+services:
+  elo:
+    build: .
+    # Para usar a imagem publicada em vez de compilar localmente, troque o
+    # `build: .` acima por:
+    #   image: ghcr.io/fillipearaujo92/elo:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Chave de acesso à API e ao painel. OBRIGATÓRIA.
+      # Gere com: openssl rand -hex 32
+      API_KEY: "${API_KEY:?defina API_KEY no .env}"
+      DATABASE_URL: "postgres://elo:${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}@db:5432/elo"
+      # URL pública do gateway. Entra nos links de mídia que o gateway gera, então
+      # precisa ser alcançável por quem consome os webhooks. Em rede local, use o
+      # IP da máquina (ex.: http://192.168.1.50:3000).
+      PUBLIC_URL: "${PUBLIC_URL:-http://localhost:3000}"
+      PORT: "3000"
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
+      MEDIA_DIR: /data/media
+    ports:
+      - "${PORT:-3000}:3000"
+    volumes:
+      # Cache de mídia em trânsito. Pode ser descartado; o consumidor dos webhooks
+      # é a fonte da verdade dos arquivos.
+      - elo-media:/data/media
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: elo
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}"
+      POSTGRES_DB: elo
+    # Sem `ports`: o banco fica acessível apenas para o gateway, na rede interna
+    # do compose. Publicar a porta exporia o pareamento do WhatsApp à rede.
+    volumes:
+      - elo-db:/var/lib/postgresql/data
+    healthcheck:
+      # O gateway só sobe depois que o banco aceita conexão — sem isto, a primeira
+      # subida falha na criação do schema.
+      test: ['CMD-SHELL', 'pg_isready -U elo -d elo']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  # ★ NÃO apague este volume: nele vive o pareamento do WhatsApp. Removê-lo obriga
+  #   a escanear o QR de todas as sessões novamente.
+  elo-db:
+  elo-media:

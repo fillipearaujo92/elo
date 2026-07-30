@@ -1,0 +1,47 @@
+# docker-compose.dev.yml — ambiente de desenvolvimento local.
+# Sobe o gateway + um Postgres dedicado. NAO usar em producao (ver docs/DEPLOY.md).
+
+services:
+  gateway:
+    build: .
+    ports:
+      - '3000:3000'
+    environment:
+      PORT: '3000'
+      # Chave de DEV. Em producao vem do ambiente/secret, nunca do compose.
+      API_KEY: dev-key-trocar
+      DATABASE_URL: postgres://gateway:gateway@db:5432/wa_gateway
+      # URL publica: usada para montar a URL de midia nos webhooks. Em dev, o
+      # backend roda no host, entao aponta para o host.
+      PUBLIC_URL: http://host.docker.internal:3000
+      LOG_LEVEL: debug
+      MEDIA_DIR: /data/media
+    volumes:
+      - media:/data/media
+    depends_on:
+      db:
+        condition: service_healthy
+    # Permite o container alcancar o backend rodando no host (webhook).
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: gateway
+      POSTGRES_PASSWORD: gateway
+      POSTGRES_DB: wa_gateway
+    ports:
+      # 5433 no host para nao colidir com um Postgres local na 5432.
+      - '5433:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U gateway -d wa_gateway']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:
+  media:
