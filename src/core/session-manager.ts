@@ -1577,6 +1577,43 @@ export class SessionManager {
   }
 
   /**
+   * Recupera o conteúdo (proto.IMessage) de uma mensagem que NÓS enviamos.
+   *
+   * Usado por encaminhar e reenviar. Busca pelo ID CRU, pelo mesmo motivo do
+   * getMessage: o mesmo id é gravado com chatIds diferentes (@c.us no envio,
+   * @lid no recibo), e o id cru é o único componente estável entre os dois.
+   *
+   * LIMITE HONESTO: só existe para mensagens ENVIADAS por este gateway, e apenas
+   * dentro da janela de retenção (SENT_MESSAGES_RETENTION_DAYS, 7 por padrão).
+   * Mensagem recebida de um contato nunca esteve aqui — para encaminhá-la, quem
+   * chama precisa fornecer o conteúdo.
+   */
+  async getStoredMessage(
+    session: string,
+    msgIdOrRaw: string,
+  ): Promise<{ content: unknown; chatId: string; rawId: string } | null> {
+    const raw = String(msgIdOrRaw).split('_').pop() ?? '';
+    if (!raw) return null;
+    const res = await this.pool.query<{ content: unknown; chat_id: string }>(
+      `SELECT content, chat_id FROM wa_gateway.sent_messages
+        WHERE session_name = $1
+          AND msg_id LIKE '%' || $2
+          AND content IS NOT NULL
+        ORDER BY updated_at DESC LIMIT 1`,
+      [session, `_${raw}`],
+    );
+    const row = res.rows[0];
+    if (!row?.content) return null;
+    // BufferJSON.reviver reconstrói os Buffers (chaves de mídia etc.) — sem isso
+    // o proto vai com objetos {type:'Buffer'} e o WhatsApp rejeita.
+    return {
+      content: JSON.parse(JSON.stringify(row.content), BufferJSON.reviver),
+      chatId: row.chat_id,
+      rawId: raw,
+    };
+  }
+
+  /**
    * URL da foto de perfil do contato. Equivale ao
    * `chat/fetchProfilePictureUrl` da Evolution e ao `/contacts/profile-picture`
    * do WAHA — o Sysled usa isso para o avatar do contato (jobs/avatar-sync.js).

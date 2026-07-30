@@ -573,6 +573,236 @@ export function registerSendRoutes(app: FastifyInstance, { sessions }: Deps): vo
     }, req.body?.reply_to);
   });
 
+  /**
+   * Reconstrói a WAMessageKey a partir do id (serializado ou cru).
+   *
+   * Apagar e editar precisam da key, não do conteúdo — então são baratos: dá para
+   * operar sobre qualquer mensagem cujo id o consumidor tenha, sem depender do
+   * que está guardado no banco.
+   */
+  function keyFromId(
+    id: string | undefined,
+    chatId: string | undefined,
+    jidFallback: string,
+  ): { remoteJid: string; id: string; fromMe: boolean } {
+    if (!id) throw new Boom('messageId e obrigatorio', { statusCode: 400 });
+    const parts = String(id).split('_');
+    const serializado = parts.length >= 3;
+    const raw = serializado ? (parts[parts.length - 1] ?? '') : String(id);
+    if (!raw) throw new Boom('messageId invalido', { statusCode: 400 });
+    // O chat vem do id serializado quando possível; senão do chatId informado.
+    const chatDoId = serializado ? parts.slice(1, -1).join('_') : '';
+    const jid = chatId ? toBaileysJid(chatId) : chatDoId ? toBaileysJid(chatDoId) : jidFallback;
+    if (!jid) throw new Boom('chatId e obrigatorio (nao deu para inferir do messageId)', { statusCode: 400 });
+    return { remoteJid: jid, id: raw, fromMe: serializado ? parts[0] === 'true' : true };
+  }
+
+  // POST /api/deleteMessage — apaga para TODOS ("Apagar para todos" do WhatsApp).
+  //
+  // O WhatsApp chama isso de revoke. Duas regras dele, não nossas:
+  //   - só dá para apagar mensagem PRÓPRIA (fromMe), exceto em grupo onde admin
+  //     pode apagar de terceiros;
+  //   - há um limite de tempo do lado do servidor. Passado o prazo, o WhatsApp
+  //     aceita o comando e simplesmente não remove no aparelho dos outros.
+  // Como o WhatsApp não devolve erro nesse caso, não temos como afirmar que
+  // apagou — devolvemos o que sabemos, sem inventar sucesso.
+  app.post<{
+    Body: { session?: string; messageId?: string; chatId?: string };
+  }>('/api/deleteMessage', async (req) => {
+    const session = req.body?.session?.trim();
+    if (!session) throw new Boom('session e obrigatorio', { statusCode: 400 });
+    const sock = sessions.requireSocket(session);
+
+    const key = keyFromId(req.body?.messageId, req.body?.chatId, '');
+    const sent = await sock.sendMessage(key.remoteJid, { delete: key } as never);
+    return {
+      success: true,
+      id: sent?.key?.id ? serializeMsgId(sent.key) : null,
+      deleted: serializeMsgId(key),
+      // O WhatsApp não confirma se o prazo de revogação já passou.
+      note: 'apagada para todos; se o prazo do WhatsApp expirou, pode permanecer no aparelho do contato',
+    };
+  });
+
+  // POST /api/editMessage — edita o TEXTO de uma mensagem já enviada.
+  //
+  // Limites do WhatsApp (não nossos): só mensagem própria, apenas ~15 minutos
+  // após o envio, e somente texto/legenda — não dá para trocar a mídia. Passado o
+  // prazo, o servidor ignora a edição sem devolver erro.
+  app.post<{
+    Body: { session?: string; messageId?: string; chatId?: string; text?: string };
+  }>('/api/editMessage', async (req) => {
+    const session = req.body?.session?.trim();
+    if (!session) throw new Boom('session e obrigatorio', { statusCode: 400 });
+    const text = typeof req.body?.text === 'string' ? req.body.text : '';
+    // Texto vazio não é edição: apagaria o conteúdo visível sem apagar a
+    // mensagem. Quem quer remover deve usar /deleteMessage.
+    if (!text.trim()) {
+      throw new Boom('text e obrigatorio (para remover, use /api/deleteMessage)', {
+        statusCode: 400,
+      });
+    }
+    const sock = sessions.requireSocket(session);
+    const key = keyFromId(req.body?.messageId, req.body?.chatId, '');
+
+    const sent = await sock.sendMessage(key.remoteJid, { text, edit: key } as never);
+    if (!sent?.key?.id) {
+      throw new Boom('edicao nao retornou id de mensagem', { statusCode: 500 });
+    }
+    // ★ Atualiza o conteúdo guardado da mensagem ORIGINAL com o texto novo.
+    //
+    // Duas armadilhas, as duas medidas no beta:
+    //
+    // 1. A edição gera uma mensagem com id próprio. Gravando só por `sent.key`, a
+    //    linha da original ficava com o texto ANTIGO — e é o id da original que o
+    //    aparelho do contato usa no retry receipt (é o que ele conhece). Ele
+    //    receberia o texto pré-edição, desfazendo a edição na prática.
+    //
+    // 2. `sent.message` de uma edição NÃO é a mensagem editada: é o envelope
+    //    `{ protocolMessage: { type: MESSAGE_EDIT, editedMessage: {...} } }`.
+    //    Guardar isso como conteúdo da original faria o retry responder com um
+    //    comando de edição em vez do texto. Extraímos o conteúdo de dentro.
+    await sessions.rememberSentMessage(session, sent.key, sent.message);
+    const envelope = sent.message as
+      | { protocolMessage?: { editedMessage?: Record<string, unknown> } }
+      | undefined;
+    const editado = envelope?.protocolMessage?.editedMessage ?? { conversation: text };
+    await sessions.rememberSentMessage(session, key, editado);
+    return {
+      success: true,
+      id: serializeMsgId(sent.key),
+      edited: serializeMsgId(key),
+      note: 'o WhatsApp so aceita edicao de mensagem propria e dentro de ~15 minutos',
+    };
+  });
+
+  // POST /api/forwardMessage — encaminha (compartilha) para outro chat.
+  //
+  // O Baileys exige a WAMessage COMPLETA para encaminhar (não só a key), porque o
+  // conteúdo é reenviado. Duas origens possíveis:
+  //   1. `message`: o consumidor passa o conteúdo (funciona para QUALQUER
+  //      mensagem, inclusive recebida de um contato);
+  //   2. o que guardamos ao enviar — só mensagens NOSSAS e dentro da janela de
+  //      retenção (7 dias por padrão).
+  // Quando nenhuma das duas resolve, o erro diz exatamente o que fazer, em vez de
+  // um 500 opaco.
+  app.post<{
+    Body: {
+      session?: string;
+      messageId?: string;
+      chatId?: string;
+      to?: string;
+      message?: Record<string, unknown>;
+      /** Marca "encaminhada" na bolha do destinatário. */
+      force?: boolean;
+    };
+  }>('/api/forwardMessage', async (req) => {
+    const session = req.body?.session?.trim();
+    if (!session) throw new Boom('session e obrigatorio', { statusCode: 400 });
+    const destino = req.body?.to?.trim() ?? req.body?.chatId?.trim();
+    if (!destino) throw new Boom('to e obrigatorio (chat de destino)', { statusCode: 400 });
+    const sock = sessions.requireSocket(session);
+    const alvoJid = toBaileysJid(destino);
+
+    // Conteúdo: do corpo, ou do que guardamos.
+    let content = req.body?.message;
+    let origemKey: { remoteJid: string; id: string; fromMe: boolean } | null = null;
+    if (!content) {
+      const id = req.body?.messageId;
+      if (!id) {
+        throw new Boom('informe messageId (de mensagem enviada por este gateway) ou message', {
+          statusCode: 400,
+        });
+      }
+      const guardada = await sessions.getStoredMessage(session, id);
+      if (!guardada) {
+        throw new Boom(
+          'conteudo nao encontrado: so guardamos mensagens ENVIADAS por este gateway e ' +
+            'dentro da janela de retencao. Para encaminhar uma mensagem recebida, ' +
+            'passe o conteudo em `message`.',
+          { statusCode: 404 },
+        );
+      }
+      content = guardada.content as Record<string, unknown>;
+      origemKey = keyFromId(id, guardada.chatId, '');
+    }
+
+    const waMessage = {
+      key: origemKey ?? { remoteJid: alvoJid, id: 'FWD', fromMe: true },
+      message: content,
+    };
+    const sent = await sock.sendMessage(
+      alvoJid,
+      { forward: waMessage, force: req.body?.force ?? true } as never,
+    );
+    if (!sent?.key?.id) {
+      throw new Boom('encaminhamento nao retornou id', { statusCode: 500 });
+    }
+    await sessions.rememberSentMessage(session, sent.key, sent.message);
+    const id = serializeMsgId(sent.key);
+    return {
+      id,
+      _data: { id: { id: sent.key.id, _serialized: id }, Info: { ID: sent.key.id } },
+      to: alvoJid,
+      timestamp: Math.floor(Date.now() / 1000),
+    };
+  });
+
+  // POST /api/resendMessage — reenvia a MESMA mensagem no mesmo chat.
+  //
+  // Diferente de encaminhar: aqui o destino é o chat original. Serve para o caso
+  // de falha de entrega (ack -1) sem o consumidor precisar guardar o payload
+  // original — o conteúdo vem do que gravamos ao enviar.
+  //
+  // Gera uma mensagem NOVA (id novo): o WhatsApp não tem "tentar de novo" para
+  // uma mensagem já emitida.
+  app.post<{
+    Body: { session?: string; messageId?: string; chatId?: string; to?: string };
+  }>('/api/resendMessage', async (req) => {
+    const session = req.body?.session?.trim();
+    if (!session) throw new Boom('session e obrigatorio', { statusCode: 400 });
+    const id = req.body?.messageId;
+    if (!id) throw new Boom('messageId e obrigatorio', { statusCode: 400 });
+
+    const sock = sessions.requireSocket(session);
+    const guardada = await sessions.getStoredMessage(session, id);
+    if (!guardada) {
+      throw new Boom(
+        'conteudo nao encontrado: so e possivel reenviar mensagem ENVIADA por este ' +
+          'gateway e dentro da janela de retencao',
+        { statusCode: 404 },
+      );
+    }
+    // Destino: o chat original, salvo se o consumidor pedir outro explicitamente.
+    const alvo = req.body?.to?.trim() ?? req.body?.chatId?.trim() ?? guardada.chatId;
+    const alvoJid = toBaileysJid(alvo);
+
+    // `forward` com force:false reenvia o conteúdo SEM a marca "encaminhada" —
+    // é o que faz parecer um envio normal, que é a intenção de "reenviar".
+    const sent = await sock.sendMessage(
+      alvoJid,
+      {
+        forward: {
+          key: { remoteJid: alvoJid, id: guardada.rawId, fromMe: true },
+          message: guardada.content,
+        },
+        force: false,
+      } as never,
+    );
+    if (!sent?.key?.id) {
+      throw new Boom('reenvio nao retornou id', { statusCode: 500 });
+    }
+    await sessions.rememberSentMessage(session, sent.key, sent.message);
+    const novoId = serializeMsgId(sent.key);
+    return {
+      id: novoId,
+      _data: { id: { id: sent.key.id, _serialized: novoId }, Info: { ID: sent.key.id } },
+      to: alvoJid,
+      resentFrom: id,
+      timestamp: Math.floor(Date.now() / 1000),
+    };
+  });
+
   // POST /api/reaction — reagir a uma mensagem (ou remover a reacao).
   // Formato do WAHA: { session, messageId, reaction }. String vazia REMOVE a reacao,
   // que e como o WhatsApp modela "desreagir" (nao ha endpoint de delete).

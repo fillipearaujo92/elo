@@ -25,6 +25,8 @@ const silentLog = {
 let enviados: Array<{ jid: string; content: Record<string, unknown>; opts?: unknown }>;
 let app: FastifyInstance;
 let seq = 0;
+/** Ids cujo conteudo foi guardado, na ordem. */
+let guardados: Array<{ id: string; content: unknown }>;
 
 beforeEach(async () => {
   enviados = [];
@@ -45,14 +47,30 @@ beforeEach(async () => {
     async sendMessage(jid: string, content: Record<string, unknown>, opts?: unknown) {
       enviados.push({ jid, content, opts });
       seq += 1;
-      return { key: { id: `MSG${seq}`, remoteJid: jid, fromMe: true }, message: {} };
+      // Edicao: o Baileys devolve o ENVELOPE de protocolo, nao a mensagem
+      // editada — replicado aqui porque o gateway precisa desembrulhar.
+      const message = content.edit
+        ? {
+            protocolMessage: {
+              type: 'MESSAGE_EDIT',
+              key: content.edit,
+              editedMessage: { extendedTextMessage: { text: content.text } },
+            },
+          }
+        : {};
+      return { key: { id: `MSG${seq}`, remoteJid: jid, fromMe: true }, message };
     },
   };
   // requireSocket é o ponto de acesso ao socket vivo; substituímos por um falso.
   (manager as unknown as { requireSocket(n: string): unknown }).requireSocket = () => sock;
-  // rememberSentMessage grava no banco; aqui não interessa.
-  (manager as unknown as { rememberSentMessage(): Promise<void> }).rememberSentMessage =
-    async () => {};
+  // rememberSentMessage grava no banco; aqui registramos para poder verificar
+  // QUAIS ids tiveram conteudo guardado (importa na edicao — ver o teste).
+  guardados = [];
+  (manager as unknown as {
+    rememberSentMessage(s: string, k: { id?: string }, c: unknown): Promise<void>;
+  }).rememberSentMessage = async (_s, k, c) => {
+    guardados.push({ id: k?.id ?? '', content: c });
+  };
 
   app = Fastify({ logger: false, bodyLimit: 8 * 1024 * 1024 });
   app.addHook('onRequest', async (req, reply) => {
@@ -320,5 +338,142 @@ describe('files[] nos endpoints antigos (sem trocar de rota)', () => {
     assert.equal(res.json().count, undefined, 'resposta antiga nao tem count');
     assert.equal(enviados.length, 1);
     assert.equal(enviados[0]!.content.caption, 'unica');
+  });
+});
+
+// ── Operar sobre mensagem já enviada: apagar, editar, encaminhar, reenviar ──
+//
+// Apagar e editar precisam só da KEY (reconstruída do id) — são baratos e valem
+// para qualquer id que o consumidor tenha. Encaminhar e reenviar precisam do
+// CONTEÚDO, que só existe para mensagens que este gateway enviou e dentro da
+// janela de retenção; por isso os dois têm caminho explícito de "não encontrado".
+
+describe('deleteMessage', () => {
+  it('manda { delete: key } para o chat, com a key reconstruida do id', async () => {
+    const res = await post('/api/deleteMessage', {
+      session: 's', messageId: 'true_5511999999999@c.us_ABC123',
+    });
+    assert.equal(res.statusCode, 200);
+    const del = enviados[0]!.content.delete as { id: string; fromMe: boolean };
+    assert.equal(del.id, 'ABC123', 'id CRU, nao o serializado');
+    assert.equal(del.fromMe, true);
+    assert.equal(enviados[0]!.jid, '5511999999999@s.whatsapp.net', 'chat inferido do id');
+  });
+
+  it('aceita id cru quando o chatId vem no corpo', async () => {
+    const res = await post('/api/deleteMessage', {
+      session: 's', messageId: 'ABC123', chatId: '5511888888888@c.us',
+    });
+    assert.equal(res.statusCode, 200);
+    assert.equal(enviados[0]!.jid, '5511888888888@s.whatsapp.net');
+  });
+
+  it('sem messageId devolve 400', async () => {
+    const res = await post('/api/deleteMessage', { session: 's' });
+    assert.equal(res.statusCode, 400);
+  });
+
+  it('id cru SEM chatId devolve 400 (nao da para inferir o chat)', async () => {
+    const res = await post('/api/deleteMessage', { session: 's', messageId: 'ABC123' });
+    assert.equal(res.statusCode, 400);
+  });
+});
+
+describe('editMessage', () => {
+  it('manda { text, edit: key } — o texto novo com a key da original', async () => {
+    const res = await post('/api/editMessage', {
+      session: 's', messageId: 'true_5511999999999@c.us_ABC123', text: 'corrigido',
+    });
+    assert.equal(res.statusCode, 200);
+    assert.equal(enviados[0]!.content.text, 'corrigido');
+    assert.equal((enviados[0]!.content.edit as { id: string }).id, 'ABC123');
+  });
+
+  it('REGRESSAO: guarda o texto novo TAMBEM na linha da mensagem ORIGINAL', async () => {
+    // A edicao gera uma mensagem com id proprio. Gravando so por ela, a linha da
+    // ORIGINAL ficava com o texto antigo — e e o id da original que o aparelho do
+    // contato usa no retry receipt, entao ele receberia o texto pre-edicao.
+    // Medido no beta antes do fix.
+    await post('/api/editMessage', {
+      session: 's', messageId: 'true_5511999999999@c.us_ORIG99', text: 'novo texto',
+    });
+    const ids = guardados.map((g) => g.id);
+    assert.ok(ids.includes('ORIG99'), 'a linha da mensagem ORIGINAL tem de ser atualizada');
+    assert.equal(guardados.length, 2, 'grava na nova e na original');
+
+    // ★ E o que se grava na original tem de ser a MENSAGEM, nao o envelope de
+    // edicao: guardar { protocolMessage } faria o retry receipt responder com um
+    // comando de edicao em vez do texto.
+    const naOriginal = guardados.find((g) => g.id === 'ORIG99')!.content as Record<string, unknown>;
+    assert.ok(!('protocolMessage' in naOriginal), 'nao pode ser o envelope de protocolo');
+    const texto =
+      (naOriginal as { extendedTextMessage?: { text?: string }; conversation?: string })
+        .extendedTextMessage?.text ??
+      (naOriginal as { conversation?: string }).conversation;
+    assert.equal(texto, 'novo texto', 'o texto guardado e o EDITADO');
+  });
+
+  it('texto vazio devolve 400 e aponta o /deleteMessage', async () => {
+    // Editar para vazio esconderia o conteudo sem apagar a mensagem — quem quer
+    // remover tem outro endpoint.
+    const res = await post('/api/editMessage', {
+      session: 's', messageId: 'true_5511999999999@c.us_ABC123', text: '   ',
+    });
+    assert.equal(res.statusCode, 400);
+    assert.match(res.json().message, /deleteMessage/);
+    assert.equal(enviados.length, 0);
+  });
+});
+
+describe('forwardMessage', () => {
+  it('encaminha o conteudo passado em `message`', async () => {
+    // Caminho que funciona para QUALQUER mensagem, inclusive recebida.
+    const res = await post('/api/forwardMessage', {
+      session: 's', to: '5511777777777@c.us',
+      message: { conversation: 'texto original' },
+    });
+    assert.equal(res.statusCode, 200);
+    const fwd = enviados[0]!.content.forward as { message: Record<string, unknown> };
+    assert.equal(fwd.message.conversation, 'texto original');
+    assert.equal(enviados[0]!.jid, '5511777777777@s.whatsapp.net');
+    assert.equal(enviados[0]!.content.force, true, 'marca "encaminhada" por padrao');
+  });
+
+  it('sem destino devolve 400', async () => {
+    const res = await post('/api/forwardMessage', {
+      session: 's', message: { conversation: 'x' },
+    });
+    assert.equal(res.statusCode, 400);
+  });
+
+  it('sem message e sem messageId devolve 400', async () => {
+    const res = await post('/api/forwardMessage', { session: 's', to: '5511777777777@c.us' });
+    assert.equal(res.statusCode, 400);
+  });
+
+  it('messageId desconhecido devolve 404 explicando o que fazer', async () => {
+    // O pool falso nao tem conteudo guardado. O erro precisa dizer que a saida e
+    // passar `message`, em vez de deixar o consumidor adivinhando.
+    const res = await post('/api/forwardMessage', {
+      session: 's', to: '5511777777777@c.us', messageId: 'true_5511999999999@c.us_NAOEXISTE',
+    });
+    assert.equal(res.statusCode, 404);
+    assert.match(res.json().message, /message/);
+    assert.equal(enviados.length, 0);
+  });
+});
+
+describe('resendMessage', () => {
+  it('sem messageId devolve 400', async () => {
+    const res = await post('/api/resendMessage', { session: 's' });
+    assert.equal(res.statusCode, 400);
+  });
+
+  it('conteudo nao guardado devolve 404 (nao inventa envio)', async () => {
+    const res = await post('/api/resendMessage', {
+      session: 's', messageId: 'true_5511999999999@c.us_NAOEXISTE',
+    });
+    assert.equal(res.statusCode, 404);
+    assert.equal(enviados.length, 0);
   });
 });

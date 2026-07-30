@@ -31,6 +31,10 @@ seu sistema  ──HTTP──▶  ELO  ──▶  WhatsApp
 | **Confirmações** | enviado → entregue → lido, e falha (ack `-1`) |
 | **Reações** | envio e recebimento, como evento próprio |
 | **Reply** | citar mensagem anterior |
+| **Editar** | corrigir o texto de mensagem já enviada |
+| **Apagar** | apagar para todos (revoke) |
+| **Encaminhar** | compartilhar mensagem com outro chat |
+| **Reenviar** | reenviar no mesmo chat após falha de entrega |
 | **Multi-sessão** | vários números no mesmo processo |
 | **Painel web** | QR com contagem regressiva, status, diagnóstico ao vivo (SSE), configuração |
 | **Sobrevive a restart** | o pareamento fica no Postgres — reiniciar não pede QR de novo |
@@ -146,6 +150,44 @@ Se **qualquer** arquivo for inválido, nada é enviado e a resposta diz qual ite
 
 Os endpoints `sendImage`, `sendVideo` e `sendFile` também aceitam `files: [...]` com o mesmo efeito, para quem já integra não precisar trocar de rota.
 
+**Operar sobre uma mensagem já enviada**
+
+```bash
+# editar o texto (o WhatsApp permite ~15 min, só mensagem própria)
+curl -X POST http://localhost:3000/api/editMessage -H 'X-Api-Key: SUA_CHAVE'   -H 'Content-Type: application/json'   -d '{"session":"atendimento","messageId":"true_5511999999999@c.us_3EB0…","text":"Corrigido"}'
+
+# apagar para todos
+curl -X POST http://localhost:3000/api/deleteMessage -H 'X-Api-Key: SUA_CHAVE'   -H 'Content-Type: application/json'   -d '{"session":"atendimento","messageId":"true_5511999999999@c.us_3EB0…"}'
+
+# encaminhar para outro chat
+curl -X POST http://localhost:3000/api/forwardMessage -H 'X-Api-Key: SUA_CHAVE'   -H 'Content-Type: application/json'   -d '{"session":"atendimento","messageId":"true_…_3EB0…","to":"5511888888888@c.us"}'
+
+# reenviar no mesmo chat (após falha de entrega)
+curl -X POST http://localhost:3000/api/resendMessage -H 'X-Api-Key: SUA_CHAVE'   -H 'Content-Type: application/json'   -d '{"session":"atendimento","messageId":"true_…_3EB0…"}'
+```
+
+`messageId` aceita o id serializado (`true_<chat>_<raw>`) ou o id cru junto com
+`chatId`. Aceita também ids de mensagens **recebidas** — para apagar a sua própria
+resposta num chat, por exemplo.
+
+Limites que são **do WhatsApp**, não do ELO:
+
+- **editar**: só mensagem própria, apenas texto/legenda (não troca a mídia), e a
+  janela é de ~15 minutos. Passado o prazo, o servidor ignora sem devolver erro.
+- **apagar para todos**: também tem prazo, e o WhatsApp não sinaliza quando expira —
+  por isso a resposta diz que a mensagem *pode* permanecer no aparelho do contato,
+  em vez de afirmar sucesso.
+- **encaminhar/reenviar** precisam do **conteúdo** da mensagem, não só do id. O ELO
+  guarda o que ele mesmo enviou (por `SENT_MESSAGES_RETENTION_DAYS`, 7 dias). Para
+  encaminhar uma mensagem **recebida** de um contato, passe o conteúdo em `message`:
+
+  ```json
+  {"session":"atendimento","to":"5511888888888@c.us",
+   "message":{"conversation":"texto a encaminhar"}}
+  ```
+
+  Sem isso, a resposta é 404 explicando o que fazer — em vez de falhar sem motivo claro.
+
 **Receber**
 
 O ELO faz `POST` no seu webhook com `{ event, session, payload }`:
@@ -184,6 +226,10 @@ Eventos: `message` (recebida), `message.ack` (confirmação de entrega/leitura),
 | `GET` | `/api/{s}/auth/qr` | QR (PNG) |
 | `POST` | `/api/sendText` … | envio de um item |
 | `POST` | `/api/sendMedia` | vários arquivos / álbum |
+| `POST` | `/api/editMessage` | edita o texto |
+| `POST` | `/api/deleteMessage` | apaga para todos |
+| `POST` | `/api/forwardMessage` | encaminha para outro chat |
+| `POST` | `/api/resendMessage` | reenvia no mesmo chat |
 | `GET` | `/api/contacts/check-exists` | o número tem WhatsApp? |
 | `GET` | `/api/{s}/lids/{lid}` | resolve id oculto → telefone |
 | `GET` | `/api/stats` | contadores por sessão |
@@ -207,7 +253,7 @@ Eventos: `message` (recebida), `message.ack` (confirmação de entrega/leitura),
 ```bash
 npm ci
 npm run dev          # watch
-npm test             # 205 testes
+npm test             # 218 testes
 npm run typecheck
 ```
 
