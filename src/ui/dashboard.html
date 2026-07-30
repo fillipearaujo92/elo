@@ -4,7 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Elo — gateway</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cg fill='none' stroke='%234ADE80' stroke-width='3.4' stroke-linecap='round'%3E%3Ccircle cx='12' cy='16' r='7.2'/%3E%3Cpath d='M19.6 9.6a7.2 7.2 0 0 1 0 12.8'/%3E%3Cpath d='M17.2 22.9a7.2 7.2 0 0 1-2.4-1.3'/%3E%3C/g%3E%3C/svg%3E">
+<!-- Favicon: viewBox 24 porque o navegador renderiza a 16px, e 24 divide melhor.
+     Traco 2.5 (proporcionalmente mais grosso que na tela grande) — em 16px um
+     traco fino desaparece. Sem o arco pequeno da versao anterior: naquele tamanho
+     ele virava um borrao ao lado da forma, em vez de ler como elo. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cg fill='none' stroke='%234ADE80' stroke-width='2.5' stroke-linecap='round'%3E%3Ccircle cx='9' cy='12' r='5.25'/%3E%3Ccircle cx='15' cy='12' r='5.25' opacity='.5'/%3E%3C/g%3E%3C/svg%3E">
 <style>
 /* ═══════════════════════════════════════════════════════════════════════════
    ELO — painel do gateway WhatsApp. Identidade própria, sem o DS do Sysled.
@@ -344,6 +348,12 @@ a{color:inherit;text-decoration:none}
   animation:lg-in .3s var(--ease) both}
 @keyframes lg-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 .mk-lg{color:var(--sig);display:block;margin:0 auto 18px}
+/* ★ NAO redimensionar por CSS: o SVG e desenhado numa grade 1:1 com o tamanho do
+   atributo (viewBox 48 a 48px). Qualquer escala fracionaria joga as coordenadas
+   em subpixel e o navegador anti-aliasa a borda inteira — era a causa do
+   serrilhado (viewBox 32 exibido a 42px = escala 1,3125, com cx/r/stroke todos
+   caindo em fracao de pixel). */
+.mk-lg,.mk{flex-shrink:0}
 .lg-i{font-size:16px;color:var(--t1);letter-spacing:.34em;text-transform:uppercase;
   font-weight:500;
   /* letter-spacing empurra o texto para a direita; o padding compensa e o
@@ -490,7 +500,7 @@ async function api(p,o={}){
 function login(err){
   document.body.style.overflow='auto'
   $('app').innerHTML=`<div class="lg"><div class="lg-c">
-   <svg class="mk-lg" width="42" height="42" viewBox="0 0 32 32" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"><circle cx="12" cy="16" r="7.2"/><path d="M19.6 9.6a7.2 7.2 0 0 1 0 12.8"/><path d="M17.2 22.9a7.2 7.2 0 0 1-2.4-1.3"/></g></svg>
+   <svg class="mk-lg" width="44" height="32" viewBox="0 0 44 32" aria-hidden="true" shape-rendering="geometricPrecision"><g fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"><circle cx="15" cy="16" r="11"/><circle cx="29" cy="16" r="11" opacity=".45"/></g></svg>
    <div class="lg-i">ELO</div>
    <div class="lg-s">gateway whatsapp</div>
    <div class="lg-v" id="lgv">${VER.v?esc(verLabel()):'&nbsp;'}</div>
@@ -550,7 +560,7 @@ function shell(){
   const errs=evs.filter(e=>e.level==='error').length
   $('app').innerHTML=`<div class="app">
    <div class="tb">
-     <div class="tb-id"><svg class="mk" width="19" height="19" viewBox="0 0 32 32" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round"><circle cx="12" cy="16" r="7.2"/><path d="M19.6 9.6a7.2 7.2 0 0 1 0 12.8"/><path d="M17.2 22.9a7.2 7.2 0 0 1-2.4-1.3"/></g></svg><span class="tb-idt"><span>ELO</span><span class="tb-v" id="tbv">${
+     <div class="tb-id"><svg class="mk" width="22" height="16" viewBox="0 0 22 16" aria-hidden="true" shape-rendering="geometricPrecision"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="7.5" cy="8" r="5.5"/><circle cx="14.5" cy="8" r="5.5" opacity=".45"/></g></svg><span class="tb-idt"><span>ELO</span><span class="tb-v" id="tbv">${
        VER.v?esc(verLabel()):''}</span></span></div>
      <nav class="tb-nav">
        <button data-v="sessions" class="${view==='sessions'?'on':''}">sessões</button>
