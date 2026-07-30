@@ -333,11 +333,27 @@ export class SessionManager {
     return row;
   }
 
+  /**
+   * Busca a sessão pelo id técnico, TOLERANTE a diferença de caixa.
+   *
+   * ★ Achado testando o README como um usuário novo: criar `{"name":"Atendimento"}`
+   * gravava `Atendimento` (o A maiúsculo passava pela checagem de "já é slug"),
+   * mas a documentação — e a intuição — usam `/api/atendimento/auth/qr`. Resultado:
+   * 404 no primeiro passo de todo mundo.
+   *
+   * A criação agora normaliza para minúsculo (ver routes/sessions.ts), então o caso
+   * não nasce mais. O `lower()` aqui cobre as sessões que já existem com maiúscula
+   * e evita que a mesma sessão responda por dois nomes diferentes.
+   */
   async getSessionRow(name: string): Promise<SessionRow | null> {
     const res = await this.pool.query<SessionRow>(
       `SELECT name, label, status, me_id, me_push_name, config, should_start,
               created_at, updated_at
-         FROM wa_gateway.sessions WHERE name = $1`,
+         FROM wa_gateway.sessions
+        WHERE name = $1 OR lower(name) = lower($1)
+        -- Correspondência exata primeiro: se houver as duas grafias (legado),
+        -- a pedida explicitamente ganha.
+        ORDER BY (name = $1) DESC LIMIT 1`,
       [name],
     );
     return res.rows[0] ?? null;

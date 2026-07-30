@@ -36,7 +36,15 @@ export function registerSessionRoutes(app: FastifyInstance, { sessions }: Deps):
       if (!v.ok) return reply.code(400).send({ message: v.error });
       const label = req.body?.label?.trim() || v.name;
 
-      const isAlreadySlug = /^[a-zA-Z0-9_-]+$/.test(v.name);
+      // ★ `a-z` MINÚSCULO de propósito, e não `a-zA-Z`.
+      //
+      // Antes, `{"name":"Atendimento"}` era considerado "já é slug" e gravado com o
+      // A maiúsculo — mas a documentação e a intuição usam
+      // `/api/atendimento/auth/qr`, que dava 404. Era o primeiro passo de qualquer
+      // usuário novo (achado testando o README do zero).
+      // Deixando só minúsculo aqui, `Atendimento` cai no slugify e vira
+      // `atendimento`: uma grafia só, sem ambiguidade entre as duas.
+      const isAlreadySlug = /^[a-z0-9_-]+$/.test(v.name);
       let name: string;
       if (isAlreadySlug) {
         name = v.name;

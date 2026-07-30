@@ -54,12 +54,14 @@ cd elo
 cp .env.example .env
 ```
 
-Edite o `.env` — no mínimo:
+Preencha **duas** linhas no `.env`:
 
 ```bash
 API_KEY=<gere com: openssl rand -hex 32>
 POSTGRES_PASSWORD=<uma senha qualquer>
 ```
+
+Só isso. Com Docker, o `DATABASE_URL` é montado pelo compose — não precisa mexer.
 
 Suba:
 
@@ -99,7 +101,10 @@ curl http://localhost:3000/api/atendimento/auth/qr \
   -H 'X-Api-Key: SUA_CHAVE' -H 'Accept: application/json'
 ```
 
-O nome é **livre** (espaços, acentos, emoji). O ELO deriva um id técnico seguro: `"Atendimento — Loja 🏬"` → `atendimento-loja`. Use esse id nas outras chamadas; o painel mostra os dois.
+O nome é **livre** (espaços, acentos, maiúsculas, emoji). O ELO deriva um id técnico
+seguro e devolve os dois campos: `"Atendimento — Loja 🏬"` → `name: "atendimento-loja"`,
+`label: "Atendimento — Loja 🏬"`. **Use o `name` nas outras chamadas** — é ele que vai
+na URL. O painel mostra os dois.
 
 **Enviar**
 
@@ -246,6 +251,13 @@ Eventos: `message` (recebida), `message.ack` (confirmação de entrega/leitura),
 
 `/health` é público; o resto exige a chave. `/api/files/*` também é aberto — os nomes de arquivo são aleatórios e não-adivinháveis, decisão consciente para o consumidor baixar a mídia sem espalhar a credencial.
 
+## Integrando no seu sistema
+
+Se o seu caso é plugar o ELO num sistema de atendimento próprio, o
+**[guia de integração](docs/INTEGRACAO.md)** cobre o caminho completo: subir,
+receber webhook (com as três regras que evitam mensagem duplicada), enviar,
+monitorar, e uma tabela de erros comuns com a causa de cada um.
+
 ## Presença: parecer humano
 
 ```bash
@@ -318,7 +330,7 @@ costuma identificar cliente.
 ```bash
 npm ci
 npm run dev          # watch
-npm test             # 240 testes
+npm test             # 242 testes
 npm run typecheck
 ```
 

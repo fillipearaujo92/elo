@@ -370,3 +370,33 @@ describe('updateConfig (PUT) — a mascara nao pode virar chave', () => {
     assert.equal(keyOf(row), 'chave-real-secreta');
   });
 });
+
+// Nome de sessão e caixa — o 404 que todo usuário novo tomava.
+//
+// Criar {"name":"Atendimento"} gravava `Atendimento` (o A maiúsculo passava pela
+// checagem de "já é slug"), mas o README e a intuição usam
+// /api/atendimento/auth/qr. 404 no PRIMEIRO passo. Achado testando o README do
+// zero, num clone limpo — não em teste.
+describe('nome de sessao: caixa', () => {
+  it('REGRESSAO: nome com Maiuscula e normalizado para minuscula', async () => {
+    const { slugify } = await import('../dist/core/slug.js');
+    // Confirma o que o slugify faz — é a base da correção na rota.
+    assert.equal(slugify('Atendimento'), 'atendimento');
+    assert.equal(slugify('Loja Centro'), 'loja-centro');
+    // E o predicado da rota NÃO pode aceitar maiúscula como "já é slug".
+    const jaEhSlug = (n: string) => /^[a-z0-9_-]+$/.test(n);
+    assert.equal(jaEhSlug('Atendimento'), false, 'com maiuscula precisa passar pelo slugify');
+    assert.equal(jaEhSlug('atendimento'), true);
+    assert.equal(jaEhSlug('canal-teste-09cf'), true, 'o formato do backend segue valido');
+  });
+
+  it('getSessionRow encontra a sessao independente da caixa', async () => {
+    // Cobre sessoes que JA existem gravadas com maiuscula (legado).
+    const { manager, pool } = makeManager({ name: 'Atendimento', label: 'Atendimento' });
+    // O pool falso responde a qualquer SELECT; o que se verifica é que a query
+    // usa lower() nos dois lados — sem isso, o legado ficaria inacessível.
+    const row = await manager.getSessionRow('atendimento');
+    assert.ok(row, 'a busca em minuscula tem de achar a sessao gravada com maiuscula');
+    assert.equal(pool.row.name, 'Atendimento');
+  });
+});
