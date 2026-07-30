@@ -327,25 +327,59 @@ a{color:inherit;text-decoration:none}
 @keyframes sp{to{transform:rotate(360deg)}}
 .spn.c{display:block;margin:60px auto}
 
-/* Entrada de chave */
-.lg{display:flex;align-items:center;justify-content:center;height:100vh;padding:20px}
-.lg-c{width:100%;max-width:330px}
-.mk-lg{color:var(--sig);display:block;margin-bottom:16px}
-.lg-i{font-size:15px;color:var(--t1);letter-spacing:.28em;text-transform:uppercase;
-  margin-bottom:5px;font-weight:500}
-.lg-s{font-size:11px;color:var(--t3);letter-spacing:.04em}
-/* Versão na entrada: sob o subtítulo, discreta, monoespaçada (é dado técnico).
-   O espaço até o formulário vive AQUI agora — saiu do .lg-s. */
-.lg-v{font-size:10px;color:var(--t4);font-family:var(--mono);letter-spacing:.06em;
-  margin-top:7px;margin-bottom:30px;min-height:12px}
+/* ── Entrada de chave ──────────────────────────────────────────────────────
+   A versão anterior era um bloco de 330px alinhado à esquerda, solto no meio da
+   tela, com uma LINHA DIVISÓRIA ÓRFÃ: o border-top do .lg-b caía depois da área
+   de erro (vazia na maior parte do tempo), então separava o botão de nada.
+   Agora é um cartão contido e centrado — a borda delimita a superfície, em vez
+   de riscar o meio dela. */
+.lg{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px;
+  /* Halo sutil atrás do cartão: dá profundidade sem pesar o fundo. */
+  background:
+    radial-gradient(ellipse 620px 420px at 50% 42%, var(--sig-dim), transparent 70%),
+    var(--ink)}
+.lg-c{width:100%;max-width:352px;background:var(--ink-2);border:1px solid var(--line);
+  padding:38px 34px 30px;text-align:center;
+  /* Entrada suave: a tela é o primeiro contato com o produto. */
+  animation:lg-in .3s var(--ease) both}
+@keyframes lg-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.mk-lg{color:var(--sig);display:block;margin:0 auto 18px}
+.lg-i{font-size:16px;color:var(--t1);letter-spacing:.34em;text-transform:uppercase;
+  font-weight:500;
+  /* letter-spacing empurra o texto para a direita; o padding compensa e o
+     nome fica opticamente centrado. */
+  padding-left:.34em}
+.lg-s{font-size:10.5px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;
+  margin-top:7px}
+/* Versão: dado técnico, discreta. min-height reserva o espaço para a tela não
+   SALTAR quando o /health responde depois do primeiro render. */
+.lg-v{font-size:9.5px;color:var(--t3);font-family:var(--mono);letter-spacing:.06em;
+  margin-top:10px;min-height:12px;opacity:.85}
+/* Régua fina separando a marca do formulário — aqui ela separa DUAS coisas. */
+.lg-c hr{border:0;border-top:1px solid var(--line-2);margin:26px 0 24px}
+/* Formulário alinhado à esquerda dentro do cartão centrado: rótulo e campo
+   pedem leitura em linha, não centralização. */
+.lg-c .fd{text-align:left;margin-bottom:0}
+.lg-c .fd input{text-align:center;letter-spacing:.14em;font-family:var(--mono);
+  padding:11px 12px}
+.lg-c .fd-e{text-align:center;margin-top:10px}
+.lg-b{display:flex;margin-top:18px}
+.lg-b button{flex:1;font-size:11px;color:var(--ink);background:var(--sig);
+  border:1px solid var(--sig);padding:11px 16px;letter-spacing:.14em;
+  text-transform:uppercase;cursor:pointer;font-family:inherit;font-weight:600;
+  transition:opacity .15s,transform .1s}
+.lg-b button:hover{opacity:.9}
+.lg-b button:active{transform:translateY(1px)}
+.lg-b button:disabled{opacity:.6;cursor:progress}
+/* O .spn padrão usa --sig na borda — invisível sobre o botão, que é --sig. Aqui
+   inverte para o tom do fundo escuro do texto. */
+.lg-b .spn{border-color:rgba(0,0,0,.25);border-top-color:var(--ink);vertical-align:middle}
+/* Rodapé do cartão: diz o que é este serviço, para quem caiu aqui sem contexto. */
+.lg-f{font-size:9.5px;color:var(--t3);letter-spacing:.05em;margin-top:22px;line-height:1.6}
 /* No cabeçalho a marca vira pilha de duas linhas: nome + versão. */
 .tb-idt{display:flex;flex-direction:column;line-height:1.05}
 .tb-v{font-size:8.5px;color:var(--t4);font-family:var(--mono);letter-spacing:.08em;
   margin-top:2px}
-.lg-b{display:flex;margin-top:26px;border-top:1px solid var(--line);padding-top:15px}
-.lg-b button{font-size:11px;color:var(--ink);background:var(--sig);border:1px solid var(--sig);
-  padding:6px 16px;letter-spacing:.1em;text-transform:uppercase;cursor:pointer;font-family:inherit}
-.lg-b button:hover{opacity:.88}
 
 @media(max-width:800px){
   .hd{display:none}
@@ -460,19 +494,48 @@ function login(err){
    <div class="lg-i">ELO</div>
    <div class="lg-s">gateway whatsapp</div>
    <div class="lg-v" id="lgv">${VER.v?esc(verLabel()):'&nbsp;'}</div>
-   <div class="fd" style="margin:0">
+   <hr>
+   <div class="fd">
      <label for="k">chave de acesso</label>
-     <input id="k" type="password" autocomplete="current-password">
-     <div class="fd-e">${err?esc(err):''}</div>
+     <input id="k" type="password" autocomplete="current-password"
+       placeholder="••••••••••••" spellcheck="false" autocapitalize="off">
+     <div class="fd-e" id="lge">${err?esc(err):''}</div>
    </div>
    <div class="lg-b"><button id="g">entrar</button></div>
+   <div class="lg-f">acesso ao painel de operação das sessões</div>
   </div></div>`
+
+  const inp=$('k'), btn=$('g'), erro=$('lge')
+
   const go=async()=>{
-    KEY=$('k').value.trim(); if(!KEY)return login('informe a chave')
-    try{await api('/api/sessions');sessionStorage.setItem('zapkey',KEY);boot()}
-    catch(e){KEY='';login(e.message)}
+    const chave=inp.value.trim()
+    // ★ NÃO re-renderiza a tela em caso de erro.
+    //
+    // A versão anterior chamava login(msg) de novo, o que recriava o DOM inteiro:
+    // a chave digitada era perdida e o foco sumia. Quem errou um caractere tinha
+    // de redigitar tudo. Agora só a mensagem muda.
+    if(!chave){erro.textContent='informe a chave';inp.focus();return}
+    erro.textContent=''
+    btn.disabled=true; btn.innerHTML='<span class="spn"></span>'
+    KEY=chave
+    try{
+      await api('/api/sessions')
+      sessionStorage.setItem('zapkey',KEY)
+      boot()
+    }catch(e){
+      KEY=''
+      erro.textContent=e.message
+      btn.disabled=false; btn.textContent='entrar'
+      // Seleciona o que foi digitado: corrigir é mais rápido que apagar tudo.
+      inp.focus(); inp.select()
+    }
   }
-  $('g').onclick=go; $('k').onkeydown=e=>{if(e.key==='Enter')go()}; $('k').focus()
+  btn.onclick=go
+  inp.onkeydown=e=>{if(e.key==='Enter')go()}
+  // Digitar limpa o erro anterior — a mensagem antiga não deve sobreviver à
+  // correção, senão parece que a nova tentativa também falhou.
+  inp.oninput=()=>{if(erro.textContent)erro.textContent=''}
+  inp.focus()
 }
 function logout(){
   KEY='';sessionStorage.removeItem('zapkey')
