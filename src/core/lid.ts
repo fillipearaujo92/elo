@@ -4,7 +4,7 @@
 //
 // ── Por que este módulo existe ─────────────────────────────────────────────
 // O WhatsApp passou a endereçar contatos por LID (@lid), um id OCULTO que não é o
-// telefone. Se o LID vazar para o Sysled como se fosse número:
+// telefone. Se o LID vazar para o consumidor como se fosse número:
 //   - o contato nasce com "+12455438745648" (14-15 dígitos, telefone inválido)
 //   - o nome não é capturado
 //   - cada resposta abre conversa NOVA, porque o "número" nunca casa com o contato

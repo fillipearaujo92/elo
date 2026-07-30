@@ -1,9 +1,7 @@
 // src/routes/sessions.ts
 //
-// Endpoints de sessao no formato WAHA. Consumidos por:
-//   - wa-provider/waha.js: connectionState, start, ensureSessionAndQR, deleteInstance,
-//     setIgnoreGroups
-//   - routes/channels.js do backend (criacao de canal e QR na UI)
+// Endpoints de sessao no formato desta API. Consumidos pelo cliente da API para: ler o estado da sessao, iniciar/parar,
+// obter o QR, remover a sessao e ajustar filtros de chat.
 
 import type { FastifyInstance } from 'fastify';
 import { snapshot } from '../core/metrics.js';
@@ -17,8 +15,8 @@ interface Deps {
 
 export function registerSessionRoutes(app: FastifyInstance, { sessions }: Deps): void {
   // POST /api/sessions — cria (e opcionalmente inicia) a sessao.
-  // O driver manda { name, start: true, config: { webhooks: [...] } } e trata 422
-  // "already exists" como benigno (waha.js:205), reaplicando o config via PUT.
+  // O cliente manda { name, start: true, config: { webhooks: [...] } }. O 422
+  // "already exists" e benigno: reaplique o config via PUT.
   app.post<{ Body: { name?: string; label?: string; start?: boolean; config?: SessionConfig } }>(
     '/api/sessions',
     async (req, reply) => {
@@ -30,7 +28,7 @@ export function registerSessionRoutes(app: FastifyInstance, { sessions }: Deps):
       // caminho de mídia, chaves do auth state). Ver src/core/slug.ts.
       //
       // Compatibilidade: quando o nome JÁ é um slug válido (é o caso do backend
-      // do Sysled, que envia channels.identifier slugificado), usamos como está —
+      // do consumidor, que envia channels.identifier slugificado), usamos como está —
       // assim nada muda para quem já integra.
       const v = validateName(raw);
       if (!v.ok) return reply.code(400).send({ message: v.error });
@@ -82,7 +80,7 @@ export function registerSessionRoutes(app: FastifyInstance, { sessions }: Deps):
   });
 
   // GET /api/stats — contadores por sessão, para o painel de operação.
-  // Não faz parte do contrato do WAHA; é endpoint próprio.
+  // Não faz parte do contrato desta API; é endpoint próprio.
   // Contadores do banco + metricas em memoria, por sessao. O painel usa isto para
   // mostrar "esta perdendo mensagem?" sem o operador abrir o Prometheus.
   app.get('/api/stats', async () => {

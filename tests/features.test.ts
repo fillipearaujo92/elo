@@ -1,6 +1,6 @@
 // tests/features.test.ts
 // Reply (mensagem citada), reactions e deteccao de ORIGEM do envio
-// (app / WhatsApp Web / API) — equivalente ao `data.source` da Evolution.
+// (app / WhatsApp Web / API) — equivalente ao `data.source` de outro gateway.
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
@@ -20,13 +20,13 @@ function msg(over: { id?: string; fromMe?: boolean; message?: Record<string, unk
   } as never;
 }
 
-describe('origem do envio (equivalente ao source da Evolution)', () => {
+describe('origem do envio (equivalente ao source de outro gateway)', () => {
   it('id de 32 hex maiusculos = app mobile', () => {
     assert.equal(detectSource('A5C959F2371C99020F4DE9EEB25435F9', false), 'app');
   });
 
   it('prefixo 3EB0 em mensagem propria = enviada pela API (nosso gateway)', () => {
-    // Distingue "eu respondi pelo Sysled" de "respondi pelo celular".
+    // Distingue "eu respondi pelo consumidor" de "respondi pelo celular".
     assert.equal(detectSource('3EB0ABC123DEF4567890', true), 'api');
   });
 
@@ -164,7 +164,7 @@ describe('reactions', () => {
 describe('reacao NAO deve virar mensagem (bug relatado)', () => {
   it('REGRESSAO: wahaTypeFromMessage classifica reactionMessage como reaction', () => {
     // Antes: reactionMessage caia em 'unknown', entao o messages.upsert emitia a
-    // reacao COMO MENSAGEM — o cliente reagia e no Sysled aparecia uma bolha junto
+    // reacao COMO MENSAGEM — o cliente reagia e no consumidor aparecia uma bolha junto
     // com a reacao ("mostra para o cliente junto com uma mensagem").
     const tipo = wahaTypeFromMessage({
       key: { id: 'X', remoteJid: '5585999@s.whatsapp.net', fromMe: false },

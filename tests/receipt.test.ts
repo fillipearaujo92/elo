@@ -5,7 +5,7 @@
 // Causa: o ACK de mensagem OUTBOUND chega no Baileys por `message-receipt.update`,
 // não por `messages.update`. Escutando só o segundo, nenhum ack era emitido — a
 // mensagem ficava presa em 'sent' (confirmado no banco do beta: 3 de 3 em 'sent')
-// e a UI do Sysled mostrava ícone de falha mesmo com a mensagem entregue.
+// e a UI do consumidor mostrava ícone de falha mesmo com a mensagem entregue.
 
 import assert from 'node:assert/strict';
 import { beforeEach, describe, it } from 'node:test';
@@ -84,7 +84,7 @@ describe('message-receipt.update (ACK de mensagem enviada)', () => {
   it('REGRESSAO: receiptTimestamp emite ack delivered', () => {
     // Sem este handler, NENHUM ack era emitido e a msg ficava presa em 'sent'.
     return feedReceipt({ receiptTimestamp: 1785331000 }).then(() => {
-      assert.deepEqual(acks(), [2], 'delivered = ack 2 na escala do WAHA');
+      assert.deepEqual(acks(), [2], 'delivered = ack 2 na escala desta API');
     });
   });
 

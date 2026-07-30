@@ -1,26 +1,26 @@
 -- src/db/schema.sql
 -- Schema do gateway. Roda no boot (idempotente) — ver src/db/pool.ts:migrate().
 --
--- Vive em schema DEDICADO (wa_gateway) e NAO no schema de tenant do Sysled: o
--- gateway e um servico externo, como a Evolution/WAHA hoje. Isso tambem evita o
+-- Vive em schema DEDICADO (wa_gateway) e NAO no schema de tenant do consumidor: o
+-- gateway e um servico externo, como a gateways de terceiros hoje. Isso tambem evita o
 -- vazamento de search_path do PgBouncer em transaction-mode que ja mordeu o projeto.
 
 CREATE SCHEMA IF NOT EXISTS wa_gateway;
 
--- Sessoes: uma linha por canal do Sysled. `name` e o identificador tecnico que o
+-- Sessoes: uma linha por canal do consumidor. `name` e o identificador tecnico que o
 -- backend manda em todo request (channels.identifier — ver wa-provider/index.js:29).
 CREATE TABLE IF NOT EXISTS wa_gateway.sessions (
   -- `name` e o IDENTIFICADOR TECNICO (slug): entra em URL, caminho de midia e
   -- chaves do auth state. Sempre [a-z0-9-]. Continua sendo a PK e o valor que o
-  -- backend do Sysled manda em todo request (channels.identifier).
+  -- backend do consumidor manda em todo request (channels.identifier).
   name          TEXT PRIMARY KEY,
-  -- Ultimo status conhecido, no vocabulario do WAHA (WORKING|STARTING|SCAN_QR_CODE|FAILED|STOPPED).
+  -- Ultimo status conhecido (WORKING|STARTING|SCAN_QR_CODE|FAILED|STOPPED).
   status        TEXT NOT NULL DEFAULT 'STOPPED',
   -- Telefone pareado ("558591218605"). connectionState() do driver expoe como me.id.
   me_id         TEXT,
   me_push_name  TEXT,
   -- config JSONB guarda os webhooks (url, events, customHeaders) e ignore.groups,
-  -- exatamente como o WAHA aceita em POST/PUT /api/sessions. O driver do backend
+  -- exatamente como a API aceita em POST/PUT /api/sessions. Um cliente
   -- faz PUT preservando o resto do config (waha.js:173-183), entao guardamos o
   -- objeto inteiro em vez de colunas separadas.
   config        JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -92,7 +92,7 @@ UPDATE wa_gateway.sessions SET label = name WHERE label IS NULL;
 CREATE INDEX IF NOT EXISTS sent_messages_created_idx
   ON wa_gateway.sent_messages (created_at);
 
--- Mapa LID -> telefone. GOWS/WAHA expoem GET /api/{session}/lids/{lid} e o backend
+-- Mapa LID -> telefone. Servimos GET /api/{session}/lids/{lid} e o consumidor
 -- DEPENDE disso (webhooks/waha.js:63): sem resolver o LID, o contato nasce com o id
 -- oculto no lugar do numero e o consultor nao consegue responder. O Baileys entrega
 -- o par (lid, pn) nos eventos de contato/mensagem; persistimos para servir o endpoint.

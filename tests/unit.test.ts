@@ -27,7 +27,7 @@ describe('conversao de JID', () => {
 
   it('preserva @lid intacto', () => {
     // Reescrever um @lid destruiria o id oculto — o envio iria para um destino
-    // invalido e tomaria 500 (bug vivido com o GOWS).
+    // invalido e tomaria 500 (bug vivido com o engine nativa).
     assert.equal(toWahaChatId('80131355848789@lid'), '80131355848789@lid');
   });
 
@@ -84,8 +84,8 @@ describe('id de mensagem', () => {
 
 describe('mapa de ACK', () => {
   it('SERVER_ACK do Baileys NAO e delivered', () => {
-    // O erro mais facil de cometer: repassar o numero do Baileys como ack do WAHA.
-    // SERVER_ACK(2) do Baileys significa "servidor recebeu" = sent. O ack 2 do WAHA
+    // O erro mais facil de cometer: repassar o numero do Baileys como ack desta API.
+    // SERVER_ACK(2) do Baileys significa "servidor recebeu" = sent. O ack 2 desta API
     // significa delivered. Confundir mostra dois ticks com a msg nao entregue.
     assert.equal(baileysStatusToWahaAck(2), 1, 'SERVER_ACK deve virar ack 1 (sent)');
     assert.notEqual(baileysStatusToWahaAck(2), 2);
@@ -113,7 +113,7 @@ describe('mapa de ACK', () => {
     assert.equal(baileysStatusToWahaAck(99), 0);
   });
 
-  it('nomes de ack acompanham a escala do WAHA', () => {
+  it('nomes de ack acompanham a escala desta API', () => {
     assert.equal(wahaAckName(-1), 'ERROR');
     assert.equal(wahaAckName(3), 'READ');
   });

@@ -16,8 +16,8 @@ interface Deps {
 
 export function registerContactRoutes(app: FastifyInstance, { sessions }: Deps): void {
   // GET /api/contacts/check-exists?phone=...&session=...
-  // Resposta do WAHA: { numberExists: boolean, chatId?: string }.
-  // O driver usa o chatId retornado como destino de envio — no GOWS alguns contatos
+  // Resposta: { numberExists: boolean, chatId?: string }.
+  // O cliente usa o chatId retornado como destino de envio — alguns contatos
   // existem so como @lid e o JID de telefone NAO entrega (waha.js:24-27).
   app.get<{ Querystring: { phone?: string; session?: string } }>(
     '/api/contacts/check-exists',
@@ -60,7 +60,7 @@ export function registerContactRoutes(app: FastifyInstance, { sessions }: Deps):
   );
 
   // GET /api/contacts?contactId=...&session=...
-  // O driver tenta este endpoint como fallback WEBJS de resolucao de LID e para
+  // O driver tenta este endpoint como fallback engine de navegador de resolucao de LID e para
   // pegar o nome (waha.js:152-170). Ele le id/_serialized, verifiedName, name, pushname.
   app.get<{ Querystring: { contactId?: string; session?: string } }>(
     '/api/contacts',
@@ -115,7 +115,7 @@ export function registerContactRoutes(app: FastifyInstance, { sessions }: Deps):
 
   // GET /api/contacts/profile-picture?contactId=...&session=...
   // Foto de perfil do contato. Equivalente ao chat/fetchProfilePictureUrl da
-  // Evolution. Devolve { profilePictureURL } — a URL e do CDN do WhatsApp e EXPIRA,
+  // outro gateway. Devolve { profilePictureURL } — a URL e do CDN do WhatsApp e EXPIRA,
   // entao quem consome deve baixar o arquivo, nao guardar o link.
   app.get<{ Querystring: { contactId?: string; session?: string } }>(
     '/api/contacts/profile-picture',

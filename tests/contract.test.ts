@@ -24,7 +24,7 @@ import { baileysStatusToWahaAck } from '../dist/core/waha-compat.js';
 // Sem default de caminho absoluto: o antigo apontava para a maquina de um dev
 // especifico, o que nao faz sentido em nenhum outro clone. Sem a variavel, os
 // testes de contrato sao SKIPPADOS com aviso (ver abaixo) — que e o certo para
-// quem nao tem o backend do Sysled a mao.
+// quem nao tem o consumidor a mao.
 const BACKEND = process.env.SYSLED_BACKEND_PATH ?? '';
 
 const translatePath = BACKEND ? join(BACKEND, 'lib/wa-provider/waha-translate.js') : '';
@@ -33,9 +33,9 @@ const hasBackend = !!BACKEND && existsSync(translatePath) && existsSync(reconnec
 
 if (!hasBackend) {
   console.warn(
-    '[contract] testes de contrato SKIPPADOS (integracao com o Sysled Chat).\n' +
+    '[contract] testes de contrato SKIPPADOS (integracao com o consumidor Chat).\n' +
       '  Sao opcionais: validam que os payloads casam com o tradutor do backend do\n' +
-      '  Sysled. Para rodar, aponte SYSLED_BACKEND_PATH para o diretorio backend/.',
+      '  o consumidor. Para rodar, aponte SYSLED_BACKEND_PATH para o diretorio backend/.',
   );
 }
 
@@ -197,7 +197,7 @@ describe('contrato: evento message', { skip: !hasBackend }, () => {
 });
 
 describe('contrato: evento message.ack', { skip: !hasBackend }, () => {
-  // A escala do WAHA e a do Baileys NAO coincidem. Este teste trava a conversao:
+  // A escala desta API e a do Baileys NAO coincidem. Este teste trava a conversao:
   // SERVER_ACK do Baileys e apenas 'sent' — trata-lo como 'delivered' mostraria
   // dois ticks para o consultor com a mensagem ainda nao entregue.
   const cases: Array<[string, number, string]> = [

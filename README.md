@@ -326,7 +326,7 @@ costuma identificar cliente.
 
 **Números novos são frágeis.** Contas recém-criadas que começam enviando para muitos contatos frios são restringidas rápido. Aqueça: converse pelo aplicativo primeiro, aumente o volume gradualmente.
 
-**Compatibilidade com a API do WAHA.** A superfície REST foi desenhada para ser compatível com a do [WAHA](https://waha.devlike.pro/), então quem já integra com ele normalmente só troca a URL base. O `engine` reportado é `BAILEYS`.
+**A API é estável e previsível.** Os endpoints seguem um formato REST direto — `POST /api/sendText` com `{ session, chatId, text }`, webhook com `{ event, session, payload }`. Se você já integrou com algum gateway de WhatsApp, o modelo mental é o mesmo: normalmente basta apontar para a nova URL base e trocar a chave.
 
 ## Desenvolvimento
 

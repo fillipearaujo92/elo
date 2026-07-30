@@ -1,11 +1,11 @@
 // src/core/payload.ts
 //
-// Monta os payloads dos eventos de webhook no formato WAHA.
+// Monta os payloads dos eventos de webhook.
 //
-// ESPECIFICACAO: backend/lib/wa-provider/waha-translate.js do sysled-chat-typescript.
-// Os campos abaixo nao sao escolha estetica — cada um e lido por aquele arquivo:
+// ESPECIFICACAO do contrato: estes campos sao lidos por quem consome o webhook.
+// Os campos abaixo nao sao escolha estetica — cada um tem um consumidor:
 //
-//   payload.id          -> msgId (idempotencia da mensagem; UNIQUE evolution_msg_id)
+//   payload.id          -> msgId; use como chave de IDEMPOTENCIA (o WhatsApp reentrega)
 //   payload.from        -> remetente; sufixo @g.us decide isGroup, @lid decide fromIsLid
 //   payload.participant -> em grupo, quem falou (fallback: author)
 //   payload.fromMe      -> mensagens proprias sao ignoradas no inbound
@@ -89,19 +89,19 @@ export function buildMessagePayload(
   const payload: Record<string, unknown> = {
     id: serializeMsgId(key),
     // `chatName` e o campo que o tradutor do consumidor le para o nome do grupo
-    // (waha-translate.js). So faz sentido em grupo.
+    // (campo do contrato). So faz sentido em grupo.
     ...(isGroup && opts.groupSubject ? { chatName: opts.groupSubject } : {}),
     timestamp: normalizeTimestamp(msg.messageTimestamp),
     from,
     fromMe: !!key.fromMe,
     body: extractBody(msg),
     type,
-    // notifyName: o backend le este campo para o NOME do contato (waha-translate.js:55,
+    // notifyName: o consumidor le este campo para o NOME do contato (
     // com fallback para pushName). Sem ele o contato fica so com o telefone.
     notifyName: msg.pushName ?? opts.nameFallback ?? null,
     hasMedia: !!media,
     // _data guarda o cru para depuracao; o translate le _data?.subtype em eventos
-    // de sistema (waha-translate.js:30).
+    // de sistema.
     _data: { subtype: null },
   };
 
@@ -118,13 +118,13 @@ export function buildMessagePayload(
   }
 
   // ── ORIGEM do envio ('app' | 'web' | 'api') ───────────────────────────────
-  // Equivalente ao `data.source` da Evolution. Permite ao operador distinguir uma
-  // resposta dada pelo Sysled de uma dada pelo celular ou pelo WhatsApp Web.
+  // Origem do envio. Permite ao operador distinguir uma
+  // resposta dada pela API de uma dada pelo celular ou pelo WhatsApp Web.
   payload.source = detectSource(key.id, !!key.fromMe);
 
   // ── REPLY (mensagem citada) ───────────────────────────────────────────────
   // O contexto da citacao vive em contextInfo.stanzaId (id da mensagem citada) e
-  // participant (autor dela). Expomos no formato do WAHA (quotedMsgId) e tambem
+  // participant (autor dela). Expomos como quotedMsgId e tambem
   // serializado, para o consumidor casar com o que gravou no envio.
   const quoted = extractQuoted(msg);
   if (quoted) {
@@ -208,7 +208,7 @@ export function buildAckPayload(args: {
   fromMe?: boolean;
 }): Record<string, unknown> {
   return {
-    // O id vai SERIALIZADO. applyAck() no backend (webhooks/waha.js:166) faz
+    // O id vai SERIALIZADO. o consumidor faz
     // split('_').pop() para casar tambem o id cru gravado no envio.
     id: args.msgId,
     from: toWahaChatId(args.chatId),
@@ -223,8 +223,8 @@ export function buildSessionStatusPayload(
   session: string,
   status: WahaSessionStatus,
 ): Record<string, unknown> {
-  // translateWahaEvent le p.status (com fallback para ev.status). O backend so
-  // compara com 'WORKING' (webhooks/waha.js:82) para decidir connected.
+  // O consumidor le p.status (com fallback para ev.status) e so
+  // compara com 'WORKING' para decidir se esta conectado.
   return { name: session, status };
 }
 

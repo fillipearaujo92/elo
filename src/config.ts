@@ -29,7 +29,7 @@ export const config = {
   host: optional('HOST', '0.0.0.0'),
 
   // Autenticacao das rotas: header X-Api-Key. O driver do backend manda essa chave
-  // (wa-provider/index.js le waha.api_key de app_settings) e o gateway a devolve
+  // (o consumidor guarda a mesma chave na sua configuracao) e o gateway a devolve
   // como customHeaders X-Webhook-Key nos webhooks.
   apiKey: required('API_KEY'),
 
@@ -40,7 +40,7 @@ export const config = {
   mediaDir: optional('MEDIA_DIR', '/data/media'),
 
   // URL publica do gateway. Usada para montar a URL de midia nos webhooks.
-  // O driver do backend reescreve localhost:3000 -> baseUrl publico (waha.js:249),
+  // O consumidor pode reescrever localhost:3000 -> baseUrl publico,
   // entao emitir localhost funcionaria, mas emitir a URL correta e mais limpo.
   publicUrl: optional('PUBLIC_URL', ''),
 
@@ -50,8 +50,8 @@ export const config = {
   // 7 dias e folga generosa e mantem a tabela pequena.
   sentMessagesRetentionDays: num('SENT_MESSAGES_RETENTION_DAYS', 7),
 
-  // Throttle de session.status. O WAHA real emite um evento a cada refresh de QR
-  // (~20s) e isso causava tempestade no backend (webhooks/waha.js:91-95 documenta).
+  // Throttle de session.status. O refresh de QR gera um evento a cada ciclo
+  // (~20s) e isso causava tempestade de eventos no consumidor.
   // Aqui suprimimos repeticoes do MESMO status dentro da janela.
   sessionStatusThrottleMs: num('SESSION_STATUS_THROTTLE_MS', 60_000),
 } as const;

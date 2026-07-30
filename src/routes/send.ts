@@ -1,9 +1,9 @@
 // src/routes/send.ts
 //
-// Endpoints de envio no formato WAHA: sendText, sendImage, sendVoice, sendVideo, sendFile.
+// Endpoints de envio no formato desta API: sendText, sendImage, sendVoice, sendVideo, sendFile.
 //
 // Contrato do retorno: wa-provider/waha.js:extractMsgId() aceita `id` como STRING
-// direto (caminho GOWS) — devolvemos o id serializado como string em `id`, e o driver
+// direto (caminho engine nativa) — devolvemos o id serializado como string em `id`, e o driver
 // considera ok apenas quando ha id (`ok: res.ok && id`). Retornar 200 sem id faz o
 // backend marcar a mensagem como falha.
 
@@ -251,7 +251,7 @@ export function registerSendRoutes(app: FastifyInstance, { sessions }: Deps): vo
     return {
       // `id` string: extractMsgId retorna direto (waha.js:18).
       id,
-      // _data espelha o shape do WAHA para consumidores que leem dali.
+      // _data espelha o shape desta API para consumidores que leem dali.
       _data: { id: { id: sent.key.id, _serialized: id }, Info: { ID: sent.key.id } },
       to: jid,
       timestamp: Math.floor(Date.now() / 1000),
@@ -891,7 +891,7 @@ export function registerSendRoutes(app: FastifyInstance, { sessions }: Deps): vo
   });
 
   // POST /api/reaction — reagir a uma mensagem (ou remover a reacao).
-  // Formato do WAHA: { session, messageId, reaction }. String vazia REMOVE a reacao,
+  // Formato desta API: { session, messageId, reaction }. String vazia REMOVE a reacao,
   // que e como o WhatsApp modela "desreagir" (nao ha endpoint de delete).
   app.post<{ Body: { session?: string; messageId?: string; chatId?: string; reaction?: string } }>(
     '/api/reaction',

@@ -1,14 +1,13 @@
 // src/core/webhook.ts
 //
-// Emissor de webhooks no formato WAHA. O consumidor e POST /webhook/waha do backend
-// (sysled-chat-typescript/backend/webhooks/waha.js), que:
+// Emissor de webhooks. O consumidor e o endpoint HTTP configurado na sessao, que:
 //   1. exige `session` no corpo (401 sem isso);
-//   2. exige o header X-Webhook-Key igual a waha.api_key (fail-closed 401);
-//   3. passa o corpo inteiro por translateWahaEvent().
+//   2. valida o header X-Webhook-Key (fail-closed: 401 sem ele);
+//   3. traduz o corpo para o seu modelo interno.
 //
-// Entrega: retry com backoff. O backend responde 200 rapido e processa async, mas
-// pode estar reiniciando (deploy) — perder uma mensagem inbound e inaceitavel, e o
-// WAHA real tambem faz retry (o driver configura retries: 15x/2s, ver waha.js:196).
+// Entrega: retry com backoff. O consumidor deve responder 200 rapido e processar
+// async — mas pode estar reiniciando (deploy), e perder uma mensagem inbound e
+// inaceitavel. Default: 15 tentativas a cada 2s, configuravel por sessao.
 
 import type { Logger } from 'pino';
 import { events } from './events.js';
@@ -51,7 +50,7 @@ export class WebhookEmitter {
     );
   }
 
-  // events ausente/vazio = assina TODOS (comportamento do WAHA). O driver do backend
+  // events ausente/vazio = assina TODOS. Um cliente bem-comportado
   // sempre manda ['message','message.ack','session.status'] explicitamente.
   private subscribes(w: WebhookConfig, event: string): boolean {
     if (!w.events?.length) return true;
@@ -65,7 +64,7 @@ export class WebhookEmitter {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     // customHeaders e o mecanismo pelo qual o backend recebe X-Webhook-Key. Sem
     // isso, TODA mensagem inbound toma 401 e desaparece silenciosamente — bug ja
-    // vivido em producao com o WAHA (documentado em waha.js:188-191).
+    // vivido em producao: sem o header, TODA mensagem inbound tomava 401.
     for (const h of w.customHeaders ?? []) {
       if (h?.name) headers[h.name] = h.value ?? '';
     }
