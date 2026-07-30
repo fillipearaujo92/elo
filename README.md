@@ -4,54 +4,66 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](package.json)
 
-Gateway WhatsApp auto-hospedado. Conecta um número via QR code e expõe uma **API REST** para enviar e receber mensagens, além de um **painel web** para operar as sessões.
+**English** · [Português](README.pt-BR.md)
 
-Roda no seu servidor. O pareamento fica no seu Postgres — nenhum dado passa por serviço de terceiros.
+Self-hosted WhatsApp gateway. Connect a number by scanning a QR code, then use a
+**REST API** to send and receive messages. Comes with a **web panel** to operate
+the sessions.
+
+Runs on your server. The pairing lives in your Postgres — no data passes through a
+third-party service.
 
 ```
-seu sistema  ──HTTP──▶  ELO  ──▶  WhatsApp
+your system  ──HTTP──▶  ELO  ──▶  WhatsApp
              ◀─webhook──
 ```
 
-> ### ⚠️ Leia antes de usar
+> ### ⚠️ Read this first
 >
-> O ELO usa a [Baileys](https://github.com/WhiskeySockets/Baileys), uma biblioteca **não-oficial** que fala o protocolo do WhatsApp Web. **Não é** um produto aprovado, endossado ou suportado pelo WhatsApp/Meta.
+> ELO uses [Baileys](https://github.com/WhiskeySockets/Baileys), an **unofficial**
+> library that speaks the WhatsApp Web protocol. It is **not** approved, endorsed
+> or supported by WhatsApp/Meta.
 >
-> - **Seu número pode ser banido.** O WhatsApp restringe e bane contas que detecta como automação, especialmente números novos ou com alto volume de envio para contatos que não interagiram antes.
-> - **Não use para disparo em massa, spam ou mensagens não solicitadas.** Além de ser o caminho mais rápido para o ban, viola os Termos de Serviço do WhatsApp.
-> - Para uso comercial em escala, o caminho oficial é a [WhatsApp Business Platform (Cloud API)](https://developers.facebook.com/docs/whatsapp/cloud-api).
-> - Software fornecido **sem garantia** (ver [LICENSE](LICENSE)). O risco do uso é seu.
+> - **Your number can be banned.** WhatsApp restricts and bans accounts it detects
+>   as automation — especially new numbers, or high volume to contacts who never
+>   interacted with you.
+> - **Do not use it for bulk messaging, spam or unsolicited messages.** Besides
+>   being the fastest route to a ban, it violates WhatsApp's Terms of Service.
+> - For commercial use at scale, the official path is the
+>   [WhatsApp Business Platform (Cloud API)](https://developers.facebook.com/docs/whatsapp/cloud-api).
+> - Provided **without warranty** (see [LICENSE](LICENSE)). The risk is yours.
 >
-> Casos de uso razoáveis: atendimento humano assistido, notificações para quem optou por recebê-las, integração com CRM próprio, automação pessoal.
+> Reasonable uses: human-assisted support, notifications for people who opted in,
+> integration with your own CRM, personal automation.
 
-## Recursos
+## Features
 
 | | |
 |---|---|
-| **Mensagens** | texto, imagem, vídeo, áudio/voz (PTT), documento, figurinha |
-| **Múltiplos arquivos** | vários numa chamada, legenda por item, ordem preservada |
-| **Álbum** | imagens/vídeos agrupados numa bolha única |
-| **Recebimento** | webhook com mídia baixada e servida por URL própria |
-| **Confirmações** | enviado → entregue → lido, e falha (ack `-1`) |
-| **Reações** | envio e recebimento, como evento próprio |
-| **Reply** | citar mensagem anterior |
-| **Editar** | corrigir o texto de mensagem já enviada |
-| **Apagar** | apagar para todos (revoke) |
-| **Encaminhar** | compartilhar mensagem com outro chat |
-| **Reenviar** | reenviar no mesmo chat após falha de entrega |
-| **Multi-sessão** | vários números no mesmo processo |
-| **Painel web** | QR com contagem regressiva, status, diagnóstico ao vivo (SSE), configuração |
-| **Testar canal** | envia uma mensagem e mostra a entrega acontecendo, sem sair do painel |
-| **Sobrevive a restart** | o pareamento fica no Postgres — reiniciar não pede QR de novo |
-| **Filtros** | ignorar grupos, status/stories, canais, listas de transmissão |
-| **Identidade do contato** | resolve o LID (id oculto) para o telefone real |
-| **Presença** | "digitando…", "gravando…", online/offline, visto por último |
-| **Marcar como lida** | tiques azuis, várias mensagens numa chamada |
-| **Métricas** | Prometheus: perda de mensagem, ACK falho, sessão caída |
+| **Messages** | text, image, video, voice note (PTT), document, sticker |
+| **Multiple files** | several in one call, per-item caption, order preserved |
+| **Albums** | images/videos grouped into a single bubble |
+| **Receiving** | webhook with media downloaded and served from your own URL |
+| **Delivery receipts** | sent → delivered → read, and failure (ack `-1`) |
+| **Reactions** | send and receive, as a dedicated event |
+| **Reply** | quote a previous message |
+| **Edit** | fix the text of a message already sent |
+| **Delete** | delete for everyone (revoke) |
+| **Forward** | share a message with another chat |
+| **Resend** | resend in the same chat after a delivery failure |
+| **Multi-session** | several numbers in one process |
+| **Web panel** | QR with countdown, status, live diagnostics (SSE), configuration |
+| **Test a channel** | sends a message and shows delivery happening, without leaving the panel |
+| **Survives restarts** | the pairing lives in Postgres — restarting does not ask for a new QR |
+| **Chat filters** | ignore groups, status/stories, channels, broadcast lists |
+| **Contact identity** | resolves the hidden id (LID) to the real phone number |
+| **Presence** | typing, recording, online/offline, last seen |
+| **Mark as read** | blue ticks, several messages in one call |
+| **Metrics** | Prometheus: message loss, failed ACKs, sessions down |
 
-## Instalação
+## Install
 
-### Docker (recomendado)
+### Docker (recommended)
 
 ```bash
 git clone https://github.com/fillipearaujo92/elo.git
@@ -59,319 +71,421 @@ cd elo
 cp .env.example .env
 ```
 
-> O compose usa a **imagem publicada** (`ghcr.io/fillipearaujo92/elo`), então não
-> precisa compilar nada. Para buildar do código local, comente `image:` e
-> descomente `build: .` no `docker-compose.yml`.
+> The compose file uses the **published image** (`ghcr.io/fillipearaujo92/elo`),
+> so nothing is compiled. To build from local source, comment `image:` and
+> uncomment `build: .` in `docker-compose.yml`.
 
-Preencha **duas** linhas no `.env`:
+Fill in **two** lines in `.env`:
 
 ```bash
-API_KEY=<gere com: openssl rand -hex 32>
-POSTGRES_PASSWORD=<uma senha qualquer>
+API_KEY=<generate with: openssl rand -hex 32>
+POSTGRES_PASSWORD=<any password>
 ```
 
-Só isso. Com Docker, o `DATABASE_URL` é montado pelo compose — não precisa mexer.
+That is it. With Docker, `DATABASE_URL` is assembled by compose — leave it alone.
 
-Suba:
+Bring it up:
 
 ```bash
 docker compose up -d
 ```
 
-Abra <http://localhost:3000>, informe a `API_KEY` e crie a primeira sessão. Escaneie o QR pelo WhatsApp (**Aparelhos conectados → Conectar aparelho**).
+Open <http://localhost:3000>, enter the `API_KEY` and create your first session.
+Scan the QR code from WhatsApp (**Linked devices → Link a device**).
 
-Depois de conectar, use **testar canal** no detalhe da sessão: ele envia uma mensagem
-e mostra a entrega progredindo (aceita → enviada → entregue → lida). É a diferença
-entre saber que o socket subiu e saber que a mensagem *chega*.
+Once connected, use **test channel** in the session detail: it sends a message and
+shows delivery progressing (accepted → sent → delivered → read). That is the
+difference between knowing the socket came up and knowing messages *arrive*.
 
-> Se o gateway precisa ser alcançado por outra máquina, defina `PUBLIC_URL` no `.env` com o endereço real (ex.: `http://192.168.1.50:3000`). Ele entra nos links de mídia enviados nos webhooks.
+> If the gateway must be reachable from another machine, set `PUBLIC_URL` in
+> `.env` to the real address (e.g. `http://192.168.1.50:3000`). It goes into the
+> media links sent on webhooks — with the default (`localhost`), your system would
+> try to download from itself.
 
-### Sem Docker
+### Without Docker
 
-Requisitos: **Node 22+** e **Postgres 14+**.
+Requirements: **Node 22+** and **Postgres 14+**.
 
 ```bash
 npm ci
-cp .env.example .env      # preencha API_KEY e DATABASE_URL
+cp .env.example .env      # fill in API_KEY and DATABASE_URL
 npm run build
-npm start                 # o schema é criado no primeiro boot
+npm start                 # the schema is created on first boot
 ```
 
-## Documentação da API
+## API documentation
 
-Com o gateway rodando, abra **<http://localhost:3000/docs>**: Swagger UI com todos
-os endpoints, os campos de cada um e um botão para testar direto do navegador.
-Informe a chave em **Authorize** e as chamadas saem autenticadas.
+With the gateway running, open **<http://localhost:3000/docs>**: Swagger UI with
+every endpoint, its fields, and a button to try each one from the browser. Enter
+your key under **Authorize** and the calls go out authenticated.
 
-A spec crua fica em `/openapi.json` (OpenAPI 3.1) — dá para gerar cliente em
-qualquer linguagem, ou importar no Insomnia/Postman.
+The raw spec lives at `/openapi.json` (OpenAPI 3.1) — generate a client in any
+language, or import it into Insomnia/Postman.
 
-Os dois são **públicos**: descrevem a forma da API, não expõem dado. Quem for
-testar informa a chave no próprio Swagger.
+Both are **public**: they describe the shape of the API and expose no data.
+Whoever wants to *test* supplies the key in Swagger itself.
 
-> A spec vive no código, e um teste compara os caminhos declarados com as rotas
-> registradas. Endpoint novo sem documentação quebra o CI — é o que impede a
-> documentação de apodrecer.
+> The spec lives in code, and a test compares its declared paths against the
+> routes actually registered. A new endpoint without documentation breaks CI —
+> that is what keeps the docs from rotting.
 
-## Uso
+## Usage
 
-Toda rota exige o header `X-Api-Key`.
+Every route requires the `X-Api-Key` header.
 
-**Criar a sessão e obter o QR**
+**Create a session and get the QR code**
 
 ```bash
 curl -X POST http://localhost:3000/api/sessions \
-  -H 'X-Api-Key: SUA_CHAVE' -H 'Content-Type: application/json' \
-  -d '{"name":"Atendimento","start":true,
-       "config":{"webhooks":[{"url":"https://seu-sistema/webhook","events":["message","message.ack","session.status"]}]}}'
+  -H 'X-Api-Key: YOUR_KEY' -H 'Content-Type: application/json' \
+  -d '{"name":"Support","start":true,
+       "config":{"webhooks":[{"url":"https://your-system/webhook","events":["message","message.ack","session.status"]}]}}'
 
-# QR em PNG (base64 no JSON, ou imagem binária sem o Accept)
-curl http://localhost:3000/api/atendimento/auth/qr \
-  -H 'X-Api-Key: SUA_CHAVE' -H 'Accept: application/json'
+# QR as PNG (base64 in JSON, or raw image without the Accept header)
+curl http://localhost:3000/api/support/auth/qr \
+  -H 'X-Api-Key: YOUR_KEY' -H 'Accept: application/json'
 ```
 
-O nome é **livre** (espaços, acentos, maiúsculas, emoji). O ELO deriva um id técnico
-seguro e devolve os dois campos: `"Atendimento — Loja 🏬"` → `name: "atendimento-loja"`,
-`label: "Atendimento — Loja 🏬"`. **Use o `name` nas outras chamadas** — é ele que vai
-na URL. O painel mostra os dois.
+`name` is **free-form** (spaces, accents, uppercase, emoji). ELO derives a safe
+technical id and returns both: `"Support — Downtown 🏬"` →
+`name: "support-downtown"`, `label: "Support — Downtown 🏬"`. **Use `name` in the
+other calls** — that is what goes in the URL. The panel shows both.
 
-**Enviar**
+**Send**
 
 ```bash
-# texto
+# text
 curl -X POST http://localhost:3000/api/sendText \
-  -H 'X-Api-Key: SUA_CHAVE' -H 'Content-Type: application/json' \
-  -d '{"session":"atendimento","chatId":"5511999999999@c.us","text":"Olá!"}'
+  -H 'X-Api-Key: YOUR_KEY' -H 'Content-Type: application/json' \
+  -d '{"session":"support","chatId":"15551234567@c.us","text":"Hello!"}'
 
-# imagem (base64 ou url)
+# image (base64 or url)
 curl -X POST http://localhost:3000/api/sendImage \
-  -H 'X-Api-Key: SUA_CHAVE' -H 'Content-Type: application/json' \
-  -d '{"session":"atendimento","chatId":"5511999999999@c.us",
-       "caption":"Confira","file":{"url":"https://exemplo.com/foto.jpg"}}'
+  -H 'X-Api-Key: YOUR_KEY' -H 'Content-Type: application/json' \
+  -d '{"session":"support","chatId":"15551234567@c.us",
+       "caption":"Take a look","file":{"url":"https://example.com/photo.jpg"}}'
 ```
 
-Endpoints de envio: `sendText`, `sendImage`, `sendVideo`, `sendVoice`, `sendFile`, `sendSticker`, `sendMedia`, `sendReaction`.
+Send endpoints: `sendText`, `sendImage`, `sendVideo`, `sendVoice`, `sendFile`,
+`sendSticker`, `sendMedia`, `sendReaction`.
 
-Para **áudio de voz** (aparecer como gravação, não como arquivo), envie em `audio/ogg; codecs=opus` via `sendVoice` — é o único formato que o WhatsApp entrega como voice note.
+For **voice notes** (showing up as a recording, not a file attachment), send
+`audio/ogg; codecs=opus` through `sendVoice` — it is the only format WhatsApp
+delivers as a voice note.
 
-**Vários arquivos numa chamada**
+**Several files in one call**
 
-`sendMedia` envia N mídias de uma vez, cada uma com sua legenda. Os envios são **serializados**, então a ordem que você pede é a ordem que o contato vê — o que não acontece disparando requisições em paralelo.
+`sendMedia` sends N media items at once, each with its own caption. Sends are
+**serialized**, so the order you ask for is the order the contact sees — which is
+not what happens when you fire requests in parallel.
 
 ```bash
 curl -X POST http://localhost:3000/api/sendMedia \
-  -H 'X-Api-Key: SUA_CHAVE' -H 'Content-Type: application/json' \
+  -H 'X-Api-Key: YOUR_KEY' -H 'Content-Type: application/json' \
   -d '{
-    "session":"atendimento","chatId":"5511999999999@c.us",
+    "session":"support","chatId":"15551234567@c.us",
     "album": true,
     "items":[
-      {"file":{"url":"https://exemplo.com/1.jpg"},"caption":"Frente"},
-      {"file":{"url":"https://exemplo.com/2.jpg"},"caption":"Lateral"},
-      {"file":{"url":"https://exemplo.com/manual.pdf","filename":"manual.pdf"},
-       "caption":"Especificações"}
+      {"file":{"url":"https://example.com/1.jpg"},"caption":"Front"},
+      {"file":{"url":"https://example.com/2.jpg"},"caption":"Side"},
+      {"file":{"url":"https://example.com/manual.pdf","filename":"manual.pdf"},
+       "caption":"Specs"}
     ]}'
 ```
 
-`album: true` agrupa imagens e vídeos numa **bolha única** (recurso nativo do WhatsApp). Documentos e áudios não entram no álbum — vão como mensagens próprias, na mesma chamada.
+`album: true` groups images and videos into a **single bubble** (a native WhatsApp
+feature). Documents and audio do not go into albums — they are sent as their own
+messages, in the same call.
 
-A resposta traz um id por item, na ordem enviada, para você casar o ACK de cada um:
+The response returns one id per item, in the order sent, so you can match each
+ACK:
 
 ```json
 { "id": "true_...", "count": 3, "album": true,
   "messages": [{ "id": "true_..." }, { "id": "true_..." }, { "id": "true_..." }] }
 ```
 
-Por item: `caption`, `asDocument` (forçar anexo mesmo sendo imagem) e `asVoice`. Sem `caption` no item, vale a `caption` da chamada — aplicada ao primeiro, que é como o WhatsApp mostra a legenda de um álbum. O tipo é escolhido pelo `mimetype`; desconhecido vira documento.
+Per item: `caption`, `asDocument` (force an attachment even for an image) and
+`asVoice`. Without a per-item `caption`, the call-level `caption` applies to the
+first item — that is how WhatsApp shows an album caption. The type is chosen by
+`mimetype`; anything unknown becomes a document.
 
-Se **qualquer** arquivo for inválido, nada é enviado e a resposta diz qual item falhou — evita deixar metade entregue e o contato receber duplicado no reenvio. Máximo de 30 itens por chamada.
+If **any** file is invalid, nothing is sent and the response names the failing
+item — this avoids leaving half the batch delivered and the contact receiving
+duplicates on retry. Maximum 30 items per call.
 
-Os endpoints `sendImage`, `sendVideo` e `sendFile` também aceitam `files: [...]` com o mesmo efeito, para quem já integra não precisar trocar de rota.
+`sendImage`, `sendVideo` and `sendFile` also accept `files: [...]` for the same
+effect, so existing integrations do not have to switch endpoints.
 
-**Operar sobre uma mensagem já enviada**
+**Act on a message already sent**
 
 ```bash
-# editar o texto (o WhatsApp permite ~15 min, só mensagem própria)
-curl -X POST http://localhost:3000/api/editMessage -H 'X-Api-Key: SUA_CHAVE'   -H 'Content-Type: application/json'   -d '{"session":"atendimento","messageId":"true_5511999999999@c.us_3EB0…","text":"Corrigido"}'
+# edit the text (WhatsApp allows ~15 min, your own messages only)
+curl -X POST http://localhost:3000/api/editMessage -H 'X-Api-Key: YOUR_KEY' \
+  -H 'Content-Type: application/json' \
+  -d '{"session":"support","messageId":"true_15551234567@c.us_3EB0…","text":"Fixed"}'
 
-# apagar para todos
-curl -X POST http://localhost:3000/api/deleteMessage -H 'X-Api-Key: SUA_CHAVE'   -H 'Content-Type: application/json'   -d '{"session":"atendimento","messageId":"true_5511999999999@c.us_3EB0…"}'
+# delete for everyone
+curl -X POST http://localhost:3000/api/deleteMessage -H 'X-Api-Key: YOUR_KEY' \
+  -H 'Content-Type: application/json' \
+  -d '{"session":"support","messageId":"true_15551234567@c.us_3EB0…"}'
 
-# encaminhar para outro chat
-curl -X POST http://localhost:3000/api/forwardMessage -H 'X-Api-Key: SUA_CHAVE'   -H 'Content-Type: application/json'   -d '{"session":"atendimento","messageId":"true_…_3EB0…","to":"5511888888888@c.us"}'
+# forward to another chat
+curl -X POST http://localhost:3000/api/forwardMessage -H 'X-Api-Key: YOUR_KEY' \
+  -H 'Content-Type: application/json' \
+  -d '{"session":"support","messageId":"true_…_3EB0…","to":"15559876543@c.us"}'
 
-# reenviar no mesmo chat (após falha de entrega)
-curl -X POST http://localhost:3000/api/resendMessage -H 'X-Api-Key: SUA_CHAVE'   -H 'Content-Type: application/json'   -d '{"session":"atendimento","messageId":"true_…_3EB0…"}'
+# resend in the same chat (after a delivery failure)
+curl -X POST http://localhost:3000/api/resendMessage -H 'X-Api-Key: YOUR_KEY' \
+  -H 'Content-Type: application/json' \
+  -d '{"session":"support","messageId":"true_…_3EB0…"}'
 ```
 
-`messageId` aceita o id serializado (`true_<chat>_<raw>`) ou o id cru junto com
-`chatId`. Aceita também ids de mensagens **recebidas** — para apagar a sua própria
-resposta num chat, por exemplo.
+`messageId` accepts the serialized id (`true_<chat>_<raw>`) or the raw id together
+with `chatId`. Ids of **received** messages work too — to delete your own reply in
+a chat, for instance.
 
-Limites que são **do WhatsApp**, não do ELO:
+Limits that are **WhatsApp's**, not ELO's:
 
-- **editar**: só mensagem própria, apenas texto/legenda (não troca a mídia), e a
-  janela é de ~15 minutos. Passado o prazo, o servidor ignora sem devolver erro.
-- **apagar para todos**: também tem prazo, e o WhatsApp não sinaliza quando expira —
-  por isso a resposta diz que a mensagem *pode* permanecer no aparelho do contato,
-  em vez de afirmar sucesso.
-- **encaminhar/reenviar** precisam do **conteúdo** da mensagem, não só do id. O ELO
-  guarda o que ele mesmo enviou (por `SENT_MESSAGES_RETENTION_DAYS`, 7 dias). Para
-  encaminhar uma mensagem **recebida** de um contato, passe o conteúdo em `message`:
+- **edit**: your own messages only, text/caption only (media cannot be swapped),
+  and roughly a 15-minute window. Past that, the server ignores the edit without
+  returning an error.
+- **delete for everyone**: also time-limited, and WhatsApp does not signal when it
+  expires — which is why the response says the message *may* remain on the
+  contact's device instead of claiming success.
+- **forward/resend** need the message **content**, not just its id. ELO keeps what
+  it sent (for `SENT_MESSAGES_RETENTION_DAYS`, 7 by default). To forward a message
+  you **received**, pass the content in `message`:
 
   ```json
-  {"session":"atendimento","to":"5511888888888@c.us",
-   "message":{"conversation":"texto a encaminhar"}}
+  {"session":"support","to":"15559876543@c.us",
+   "message":{"conversation":"text to forward"}}
   ```
 
-  Sem isso, a resposta é 404 explicando o que fazer — em vez de falhar sem motivo claro.
+  Without it the response is a 404 explaining what to do — rather than failing for
+  no clear reason.
 
-**Receber**
+**Receive**
 
-O ELO faz `POST` no seu webhook com `{ event, session, payload }`:
+ELO `POST`s to your webhook with `{ event, session, payload }`:
 
 ```json
 {
   "event": "message",
-  "session": "atendimento",
+  "session": "support",
   "payload": {
-    "id": "false_5511999999999@c.us_3EB0...",
-    "from": "5511999999999@c.us",
+    "id": "false_15551234567@c.us_3EB0...",
+    "from": "15551234567@c.us",
     "fromMe": false,
     "type": "chat",
-    "body": "Olá!",
-    "notifyName": "Maria",
+    "body": "Hello!",
+    "notifyName": "Mary",
     "timestamp": 1785358125,
     "source": "app"
   }
 }
 ```
 
-Eventos: `message` (recebida), `message.ack` (confirmação de entrega/leitura), `session.status` (conexão). Se a mensagem tem mídia, vem `media.url` para você baixar. Falha na entrega é retentada (padrão 15× a cada 2s, configurável); respostas 4xx não são retentadas.
+Events: `message` (incoming), `message.ack` (delivery/read receipt),
+`session.status` (connection), `presence.update` (the contact typing). When a
+message has media, `media.url` tells you where to download it. Failed deliveries
+are retried (15× every 2s by default, configurable); 4xx responses are not.
 
-`payload.id` é estável e serve como chave de idempotência — o WhatsApp pode reentregar o mesmo evento.
+`payload.id` is stable and works as an idempotency key — WhatsApp can redeliver
+the same event.
 
-## API
+Three rules that save you trouble:
 
-| Método | Rota | O quê |
-|---|---|---|
-| `POST` | `/api/sessions` | cria (e inicia) |
-| `GET` | `/api/sessions` | lista (segredos mascarados) |
-| `GET` | `/api/sessions/{s}` | status, número pareado |
-| `PATCH` | `/api/sessions/{s}/settings` | webhook, eventos, filtros, auto-start |
-| `POST` | `/api/sessions/{s}/restart` \| `/stop` | ciclo de vida |
-| `DELETE` | `/api/sessions/{s}` | apaga sessão e pareamento |
-| `GET` | `/api/{s}/auth/qr` | QR (PNG) |
-| `POST` | `/api/sendText` … | envio de um item |
-| `POST` | `/api/sendMedia` | vários arquivos / álbum |
-| `POST` | `/api/editMessage` | edita o texto |
-| `POST` | `/api/deleteMessage` | apaga para todos |
-| `POST` | `/api/forwardMessage` | encaminha para outro chat |
-| `POST` | `/api/resendMessage` | reenvia no mesmo chat |
-| `GET` | `/api/contacts/check-exists` | o número tem WhatsApp? |
-| `GET` | `/api/{s}/lids/{lid}` | resolve id oculto → telefone |
-| `GET` | `/api/stats` | contadores por sessão |
-| `GET` | `/api/events` | diagnóstico ao vivo (SSE) |
-| `POST` | `/api/typing` | "digitando…" / "gravando…" |
-| `POST` | `/api/presence` | online/offline, por chat ou global |
-| `POST` | `/api/markAsRead` | marca como lida |
-| `GET` | `/api/presence/{chatId}` | visto por último do contato |
-| `GET` | `/api/backup` | baixa o pareamento |
-| `GET` | `/api/backup/status` | há backup? está em dia? |
-| `POST` | `/api/backup/restore` | restaura (destrutivo) |
-| `GET` | `/metrics` | métricas Prometheus |
-| `GET` | `/health` | saúde (valida o banco), versão e commit |
+**Answer 200 immediately.** Processing before responding makes ELO treat slowness
+as failure and retry — you receive the same message several times.
 
-`/health` é público; o resto exige a chave. `/api/files/*` também é aberto — os nomes de arquivo são aleatórios e não-adivinháveis, decisão consciente para o consumidor baixar a mídia sem espalhar a credencial.
+**Use `payload.id` to deduplicate.** WhatsApp redelivers events.
 
-## Integrando no seu sistema
+**4xx is not retried.** If your endpoint answers 4xx (wrong key, missing route),
+the event is **dropped** — retrying a contract error would only queue garbage.
+5xx and timeouts are retried.
 
-Se o seu caso é plugar o ELO num sistema de atendimento próprio, o
-**[guia de integração](docs/INTEGRACAO.md)** cobre o caminho completo: subir,
-receber webhook (com as três regras que evitam mensagem duplicada), enviar,
-monitorar, e uma tabela de erros comuns com a causa de cada um.
+## Integrating with your system
 
-## Presença: parecer humano
+If your case is plugging ELO into your own support system, the
+**[integration guide](docs/INTEGRACAO.md)** (Portuguese) walks the full path:
+bring it up, receive webhooks, send, monitor, and a table of common errors with
+the cause of each.
+
+## Presence: sounding human
 
 ```bash
-# "digitando…" por 8s (o ELO renova sozinho; o WhatsApp expira em ~10s)
-curl -X POST http://localhost:3000/api/typing -H 'X-Api-Key: SUA_CHAVE'   -H 'Content-Type: application/json'   -d '{"session":"atendimento","chatId":"5511999999999@c.us","duration":8000}'
+# typing for 8s (ELO refreshes it; WhatsApp expires it in ~10s)
+curl -X POST http://localhost:3000/api/typing -H 'X-Api-Key: YOUR_KEY' \
+  -H 'Content-Type: application/json' \
+  -d '{"session":"support","chatId":"15551234567@c.us","duration":8000}'
 
-# "gravando áudio…"
+# recording audio
 #   -d '{"session":"…","chatId":"…","kind":"recording","duration":5000}'
 
-# marcar como lida (tiques azuis)
-curl -X POST http://localhost:3000/api/markAsRead -H 'X-Api-Key: SUA_CHAVE'   -H 'Content-Type: application/json'   -d '{"session":"atendimento","chatId":"5511999999999@c.us",
-       "messageIds":["false_5511999999999@c.us_3EB0…"]}'
+# mark as read (blue ticks)
+curl -X POST http://localhost:3000/api/markAsRead -H 'X-Api-Key: YOUR_KEY' \
+  -H 'Content-Type: application/json' \
+  -d '{"session":"support","chatId":"15551234567@c.us",
+       "messageIds":["false_15551234567@c.us_3EB0…"]}'
 ```
 
-A requisição do `typing` responde **na hora** — a renovação corre em background,
-porque prender o handler por 20s esgotaria conexões num atendimento movimentado.
+The `typing` request returns **immediately** — the refresh runs in the background,
+because holding a handler open for 20s would exhaust connections on a busy support
+desk.
 
-O contato "digitando" chega a você pelo evento `presence.update` no webhook.
+The contact typing reaches you through the `presence.update` webhook event.
 
-**Visto por último** depende da privacidade do contato: se ele restringe, o WhatsApp
-simplesmente não envia o dado — e é recíproco (quem esconde o seu também não vê o dos
-outros). Nesse caso o ELO devolve `available: false` com a explicação, em vez de
-fingir que a informação existe.
+**Last seen** depends on the contact's privacy settings: if they restrict it,
+WhatsApp simply does not send the data — and it is reciprocal (hiding yours also
+hides theirs from you). In that case ELO returns `available: false` with the
+explanation, rather than pretending the information exists.
 
-## Observabilidade
+## Observability
 
-`GET /metrics` expõe métricas no formato Prometheus. Os quatro sinais que importam:
+`GET /metrics` exposes Prometheus metrics. The four signals that matter:
 
 ```
-elo_inbound_undecryptable_total  > 0   perdendo mensagem AGORA
-elo_webhook_lost_total           > 0   evento nunca alcançou seu sistema
-elo_ack_failed_total             > 0   mensagem saiu e não foi entregue
-elo_session_up{session="…"}      = 0   sessão caída
+elo_inbound_undecryptable_total  > 0   losing messages RIGHT NOW
+elo_webhook_lost_total           > 0   an event never reached your system
+elo_ack_failed_total             > 0   a message left and was not delivered
+elo_session_up{session="…"}      = 0   session is down
 ```
 
-Isto existe por um motivo concreto: um bug de criptografia derrubou todo o
-recebimento e **só foi descoberto quando alguém mandou uma mensagem e notou a
-ausência** — o gateway já registrava os descartes no log e não avisava ninguém.
-Falha silenciosa é o pior modo de falha de um gateway, e é o que esses contadores
-tornam visível.
+This exists for a concrete reason: an encryption bug once took down all inbound
+traffic and **was only discovered when someone sent a message and noticed it never
+arrived** — the gateway was already logging the drops and telling nobody. Silent
+failure is the worst failure mode for a gateway, and these counters make it
+visible.
 
-Exemplo de alerta (Prometheus):
+Example Prometheus alerts:
 
 ```yaml
-- alert: EloPerdendoMensagem
+- alert: EloLosingMessages
   expr: increase(elo_inbound_undecryptable_total[10m]) > 0
   annotations:
-    summary: "ELO nao esta decifrando mensagens em {{ $labels.session }}"
+    summary: "ELO is failing to decrypt messages on {{ $labels.session }}"
 
-- alert: EloSessaoCaida
+- alert: EloSessionDown
   expr: elo_session_up == 0
   for: 5m
 ```
 
-`/metrics` exige a `X-Api-Key`: os nomes das sessões são rótulos, e nome de sessão
-costuma identificar cliente.
+`/metrics` requires the `X-Api-Key`: session names are labels, and a session name
+usually identifies a customer.
 
-## Notas operacionais
+No Prometheus? `GET /api/stats` returns the same numbers in JSON, per session. The
+panel also has a live diagnostics tab.
 
-**O volume do Postgres é o pareamento.** Apagá-lo obriga a escanear o QR de novo em todas as sessões. Inclua-o no seu backup.
+## API reference
 
-**Uma sessão aceita um socket.** O ELO roda hoje em **réplica única** — não há coordenação entre instâncias, então duas réplicas subiriam a mesma sessão e derrubariam o pareamento. Rode uma só.
+| Method | Route | What |
+|---|---|---|
+| `POST` | `/api/sessions` | create (and start) |
+| `GET` | `/api/sessions` | list (secrets masked) |
+| `GET` | `/api/sessions/{s}` | status, paired number |
+| `PATCH` | `/api/sessions/{s}/settings` | webhook, events, filters, auto-start |
+| `POST` | `/api/sessions/{s}/restart` \| `/stop` | lifecycle |
+| `DELETE` | `/api/sessions/{s}` | delete session and pairing |
+| `GET` | `/api/{s}/auth/qr` | QR code (PNG) |
+| `POST` | `/api/sendText` … | send one item |
+| `POST` | `/api/sendMedia` | several files / album |
+| `POST` | `/api/editMessage` | edit the text |
+| `POST` | `/api/deleteMessage` | delete for everyone |
+| `POST` | `/api/forwardMessage` | forward to another chat |
+| `POST` | `/api/resendMessage` | resend in the same chat |
+| `POST` | `/api/typing` | typing / recording |
+| `POST` | `/api/presence` | online/offline, per chat or account |
+| `POST` | `/api/markAsRead` | mark as read |
+| `GET` | `/api/presence/{chatId}` | contact's last seen |
+| `GET` | `/api/contacts/check-exists` | does the number have WhatsApp? |
+| `GET` | `/api/{s}/lids/{lid}` | resolve hidden id → phone |
+| `GET` | `/api/stats` | per-session counters |
+| `GET` | `/api/events` | live diagnostics (SSE) |
+| `GET` | `/api/backup` | download the pairing |
+| `GET` | `/api/backup/status` | is there a backup? is it current? |
+| `POST` | `/api/backup/restore` | restore (destructive) |
+| `GET` | `/metrics` | Prometheus metrics |
+| `GET` | `/health` | health (validates the database), version and commit |
+| `GET` | `/docs` · `/openapi.json` | API documentation |
 
-**Números novos são frágeis.** Contas recém-criadas que começam enviando para muitos contatos frios são restringidas rápido. Aqueça: converse pelo aplicativo primeiro, aumente o volume gradualmente.
+`/health`, `/docs` and `/openapi.json` are public; everything else needs the key.
+`/api/files/*` is open too — file names are random and unguessable, a deliberate
+trade-off so webhook consumers can fetch media without spreading the master
+credential.
 
-**A API é estável e previsível.** Os endpoints seguem um formato REST direto — `POST /api/sendText` com `{ session, chatId, text }`, webhook com `{ event, session, payload }`. Se você já integrou com algum gateway de WhatsApp, o modelo mental é o mesmo: normalmente basta apontar para a nova URL base e trocar a chave.
+## Running in production
 
-## Desenvolvimento
+**The Postgres volume is the pairing.** Deleting it forces a new QR scan on every
+session.
+
+ELO helps with that: the panel warns when a session is paired and has no backup,
+and one click downloads what cannot be recreated.
+
+```bash
+# download
+curl -OJ http://localhost:3000/api/backup -H 'X-Api-Key: YOUR_KEY'
+
+# restore (REPLACES the current pairing — requires confirm)
+jq '{confirm:true, format, data}' elo-backup-*.json | \
+  curl -X POST http://localhost:3000/api/backup/restore \
+    -H 'X-Api-Key: YOUR_KEY' -H 'Content-Type: application/json' -d @-
+```
+
+The file holds `sessions`, `auth_creds`, `auth_keys` and `lid_map` — what rebuilds
+the connection. It does not include the sent-message history (transit cache: it is
+what grows most and does not improve a restore).
+
+> ⚠️ **The backup contains WhatsApp keys.** Anyone holding the file can
+> impersonate the connected number: read and send messages. Store it like a
+> password.
+
+`GET /api/backup/status` returns the current risk (`no_backup`, `stale`, `ok`), so
+you can monitor it externally.
+
+**One instance per database.** There is no coordination between replicas; two
+instances would bring up the same session and break the pairing.
+
+**Do not expose it on the open internet** — use an internal network, a VPN, or a
+reverse proxy with TLS and origin restrictions.
+
+**Use a separate webhook key** from `API_KEY` if the destination is third-party
+(`webhookKey` on `PATCH /settings`).
+
+**New numbers are fragile.** High volume to contacts who never interacted is the
+fastest route to a block. Warm up gradually.
+
+**Pin the image version** in production (`ELO_TAG=0.1.0`) — `latest` moves under
+your feet on the next release.
+
+## Development
 
 ```bash
 npm ci
 npm run dev          # watch
-npm test             # 276 testes
+npm test             # 278 tests
 npm run typecheck
 ```
 
-A suíte cobre o que quebrou em produção de verdade: progressão de ACK, resolução de LID, entrega de webhook, tradução de payload, filtros de chat e a máscara de segredos. Vale ler os comentários — cada teste marcado com `REGRESSÃO` documenta um bug real e por que ele acontecia.
+The test suite covers what actually broke in production: ACK progression, LID
+resolution, webhook delivery, payload translation, chat filters and secret
+masking. The comments are worth reading — every test marked `REGRESSÃO` documents
+a real bug and why it happened.
 
-Os testes em `contract.test.ts` validam a integração com um consumidor específico e são **skippados** por padrão.
+Code comments and the integration guide are in Portuguese; the API spec and this
+README are in English. Different audiences: whoever maintains the gateway, and
+whoever integrates with it.
 
-## Licença
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Short version: open an issue before a
+non-trivial PR, include tests for the behaviour you change, and keep the scope
+tight. Security issues: [SECURITY.md](SECURITY.md) — please do not open a public
+issue.
+
+## License
 
 [MIT](LICENSE) — Fillipe Araújo.
 
-Não afiliado ao WhatsApp Inc. ou Meta. "WhatsApp" é marca registrada da Meta Platforms, Inc.
+Not affiliated with WhatsApp Inc. or Meta. "WhatsApp" is a trademark of Meta
+Platforms, Inc.
