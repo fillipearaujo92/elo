@@ -37,6 +37,7 @@ seu sistema  ──HTTP──▶  ELO  ──▶  WhatsApp
 | **Reenviar** | reenviar no mesmo chat após falha de entrega |
 | **Multi-sessão** | vários números no mesmo processo |
 | **Painel web** | QR com contagem regressiva, status, diagnóstico ao vivo (SSE), configuração |
+| **Testar canal** | envia uma mensagem e mostra a entrega acontecendo, sem sair do painel |
 | **Sobrevive a restart** | o pareamento fica no Postgres — reiniciar não pede QR de novo |
 | **Filtros** | ignorar grupos, status/stories, canais, listas de transmissão |
 | **Identidade do contato** | resolve o LID (id oculto) para o telefone real |
@@ -70,6 +71,10 @@ docker compose up -d
 ```
 
 Abra <http://localhost:3000>, informe a `API_KEY` e crie a primeira sessão. Escaneie o QR pelo WhatsApp (**Aparelhos conectados → Conectar aparelho**).
+
+Depois de conectar, use **testar canal** no detalhe da sessão: ele envia uma mensagem
+e mostra a entrega progredindo (aceita → enviada → entregue → lida). É a diferença
+entre saber que o socket subiu e saber que a mensagem *chega*.
 
 > Se o gateway precisa ser alcançado por outra máquina, defina `PUBLIC_URL` no `.env` com o endereço real (ex.: `http://192.168.1.50:3000`). Ele entra nos links de mídia enviados nos webhooks.
 

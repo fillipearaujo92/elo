@@ -331,6 +331,31 @@ a{color:inherit;text-decoration:none}
 @keyframes sp{to{transform:rotate(360deg)}}
 .spn.c{display:block;margin:60px auto}
 
+/* Teste de canal: linha do tempo da entrega. Cada passo acende quando o evento
+   correspondente chega pelo SSE — é o que mostra a mensagem ACONTECENDO em vez de
+   um "enviado" que não diz se chegou. */
+.tl{display:flex;flex-direction:column;gap:0;margin-top:16px}
+.tl-i{display:flex;align-items:center;gap:12px;padding:9px 0;
+  border-bottom:1px solid var(--line-2);font-size:11.5px;color:var(--t4);
+  transition:color .2s}
+.tl-i:last-child{border-bottom:none}
+.tl-i.on{color:var(--t1)}
+.tl-i.er{color:var(--red)}
+/* Marcador: círculo vazio → preenchido quando o passo acontece. */
+.tl-d{width:9px;height:9px;border:1px solid var(--line);border-radius:50%;
+  flex-shrink:0;transition:.2s}
+.tl-i.on .tl-d{border-color:var(--sig);background:var(--sig)}
+.tl-i.er .tl-d{border-color:var(--red);background:var(--red)}
+.tl-l{flex:1;min-width:0}
+.tl-t{font-family:var(--mono);font-size:10.5px;color:var(--t3);white-space:nowrap}
+.tl-i.on .tl-t{color:var(--sig)}
+/* Resultado final do teste. */
+.tl-r{margin-top:14px;padding:11px 13px;border:1px solid var(--line);
+  font-size:11.5px;line-height:1.55;color:var(--t2)}
+.tl-r.ok{border-color:var(--sig);color:var(--t1)}
+.tl-r.er{border-color:var(--red)}
+.tl-r b{color:var(--t1);font-weight:600}
+
 /* Faixa de aviso: o pareamento existe e nunca foi para um backup. Discreta —
    informa e oferece a ação, sem bloquear o painel nem virar modal. */
 .wr{display:flex;align-items:center;gap:14px;border:1px solid var(--amb);
@@ -766,6 +791,8 @@ async function stream(){
           if(view==='events')lg()
           if(e.kind==='session')load()
           if(e.level==='error')badge()
+          // Alimenta o teste de canal aberto, se houver.
+          ackDoTeste(e)
         }catch{}
       }
     }
@@ -1296,6 +1323,177 @@ function hdrRow(nm,vl){
   </div>`
 }
 
+// ── Testar canal ───────────────────────────────────────────────────────────
+//
+// Responde a pergunta que o operador realmente tem depois de escanear o QR: não
+// "o socket subiu?" (o status já diz), e sim "a mensagem CHEGA?".
+//
+// O valor está em mostrar a entrega PROGREDINDO. Um "enviado com sucesso" não
+// distingue mensagem entregue de mensagem que saiu e morreu no caminho — e essa
+// distinção é exatamente o bug que mais custou neste projeto.
+const PASSOS = [
+  ['send', 'aceita pelo gateway'],
+  ['1', 'enviada ao WhatsApp'],
+  ['2', 'entregue no aparelho'],
+  ['3', 'lida pelo contato'],
+]
+
+function testar(name){
+  const s=sess.find(x=>x.name===name); if(!s)return
+  // Sugere o próprio número: testar consigo mesmo é o caminho mais rápido e não
+  // incomoda ninguém.
+  const meu=s.me?.id?String(s.me.id).split('@')[0]:''
+
+  const o=modal(`<div class="md-h"><b>testar canal</b>
+   <span style="color:var(--t1)">${esc(s.label||s.name)}</span>
+   <div class="sp"></div><button id="x">fechar</button></div>
+   <div class="md-b">
+     <div class="fd">
+       <label for="tn">número de destino</label>
+       <input id="tn" value="${esc(meu)}" placeholder="5511999999999" autocomplete="off"
+         inputmode="numeric">
+       <p class="fd-h">Com país e DDD, só dígitos. O padrão é o próprio número
+         desta sessão — testar consigo mesmo não incomoda ninguém.</p>
+     </div>
+     <div class="fd" style="margin-bottom:0">
+       <label for="tm">mensagem</label>
+       <input id="tm" value="Teste do ELO" autocomplete="off">
+     </div>
+     <div class="fd-e" id="ter"></div>
+     <div id="tlw"></div>
+   </div>
+   <div class="md-a">
+     <button id="tf">fechar</button><div class="sp"></div>
+     <button id="tg" class="k">enviar teste</button>
+   </div>`,true)
+
+  const fechar=()=>{ pararEscuta(); o.remove() }
+  o.querySelector('#x').onclick=fechar
+  o.querySelector('#tf').onclick=fechar
+  o.querySelector('#tn').focus()
+  o.querySelector('#tg').onclick=()=>enviarTeste(name,o)
+}
+
+/** Passo da linha do tempo, com marcador e horário. */
+function linhaPasso(id,rot,estado,quando){
+  return `<div class="tl-i${estado?' '+estado:''}" data-p="${id}">
+    <span class="tl-d"></span>
+    <span class="tl-l">${rot}</span>
+    <span class="tl-t">${quando||''}</span>
+  </div>`
+}
+
+// Escuta de ACK em curso: liga os eventos do SSE ao teste aberto.
+let escutando=null
+
+function pararEscuta(){
+  if(escutando?.timer)clearTimeout(escutando.timer)
+  escutando=null
+}
+
+/**
+ * Chamado pelo stream() a cada evento. Acende o passo correspondente.
+ *
+ * Casa pelo ID CRU: o msgId do evento e o do envio podem divergir no chatId
+ * (@c.us no envio, @lid no recibo) — foi o que já quebrou o casamento de ACK
+ * antes. O sufixo é o único componente estável.
+ */
+function ackDoTeste(ev){
+  if(!escutando||ev.kind!=='ack')return
+  const msgId=String(ev.detail?.msgId||'')
+  if(!msgId.endsWith(escutando.raw))return
+  const ack=Number(ev.detail?.ack)
+  marcarPasso(String(ack), ack<0?'er':'on')
+  if(ack<0){
+    resultado('er','<b>Falhou na entrega.</b> A mensagem saiu do gateway mas o '+
+      'WhatsApp não confirmou. Número inválido, ou o contato bloqueou este número.')
+    pararEscuta()
+  }else if(ack>=2){
+    const ms=Date.now()-escutando.t0
+    resultado('ok',`<b>Canal funcionando.</b> Entregue em ${(ms/1000).toFixed(1)}s. `+
+      (ack>=3?'O contato já leu.':'Aguardando leitura.'))
+    if(ack>=3)pararEscuta()
+  }
+}
+
+function marcarPasso(id,estado){
+  const el=document.querySelector(`.tl-i[data-p="${id}"]`)
+  if(!el||el.classList.contains('on'))return
+  el.className=`tl-i ${estado}`
+  const t=el.querySelector('.tl-t')
+  if(t)t.textContent=new Date().toLocaleTimeString('pt-BR')
+}
+
+function resultado(cls,html){
+  const w=$('tlw'); if(!w)return
+  let r=w.querySelector('.tl-r')
+  if(!r){ w.insertAdjacentHTML('beforeend',`<div class="tl-r"></div>`); r=w.querySelector('.tl-r') }
+  r.className=`tl-r ${cls}`
+  r.innerHTML=html
+}
+
+async function enviarTeste(name,o){
+  const fone=(o.querySelector('#tn').value||'').replace(/\D/g,'')
+  const texto=(o.querySelector('#tm').value||'').trim()
+  const er=o.querySelector('#ter')
+  const btn=o.querySelector('#tg')
+  er.textContent=''
+
+  // Validação local antes de gastar uma ida ao WhatsApp.
+  if(fone.length<10||fone.length>15){
+    er.textContent='número com país e DDD (10 a 15 dígitos)'
+    o.querySelector('#tn').focus(); return
+  }
+  if(!texto){ er.textContent='escreva uma mensagem'; return }
+
+  btn.disabled=true; btn.innerHTML='<span class="spn"></span>'
+  $('tlw').innerHTML=`<div class="tl">${PASSOS.map(([id,rot])=>linhaPasso(id,rot,'','')).join('')}</div>`
+
+  try{
+    // ★ Confere se o número TEM WhatsApp antes de enviar. Sem isto, um número
+    // errado gera um envio que o WhatsApp aceita e nunca entrega — o operador
+    // veria "enviada" e concluiria que o canal está com problema, quando o
+    // problema é o número.
+    const ex=await api(`/api/contacts/check-exists?phone=${fone}&session=${encodeURIComponent(name)}`)
+      .catch(()=>null)
+    if(ex&&ex.numberExists===false){
+      marcarPasso('send','er')
+      resultado('er','<b>Este número não tem WhatsApp.</b> O canal pode estar '+
+        'perfeito — confira o número e tente de novo.')
+      btn.disabled=false; btn.innerHTML='enviar teste'
+      return
+    }
+
+    const r=await api('/api/sendText',{
+      method:'POST',
+      body:JSON.stringify({session:name,chatId:`${fone}@c.us`,text:texto}),
+    })
+    marcarPasso('send','on')
+
+    const raw=String(r.id||'').split('_').pop()
+    escutando={ raw, t0:Date.now() }
+    resultado('','Enviada. Aguardando confirmação de entrega do WhatsApp…')
+
+    // Sem confirmação em 45s: o WhatsApp costuma responder em segundos. Além
+    // disso, o mais provável é o aparelho do contato estar offline — e dizer
+    // isso é mais útil que deixar a tela girando para sempre.
+    escutando.timer=setTimeout(()=>{
+      if(!escutando)return
+      resultado('','<b>Enviada, sem confirmação ainda.</b> O gateway aceitou e '+
+        'o WhatsApp não confirmou a entrega em 45s — normalmente significa que o '+
+        'aparelho do contato está offline. A entrega acontece quando ele voltar.')
+      pararEscuta()
+    },45000)
+    escutando.timer.unref?.()
+
+    btn.disabled=false; btn.innerHTML='enviar de novo'
+  }catch(e){
+    marcarPasso('send','er')
+    resultado('er',`<b>O gateway recusou o envio.</b> ${esc(e.message)}`)
+    btn.disabled=false; btn.innerHTML='enviar teste'
+  }
+}
+
 // ── Detalhe ────────────────────────────────────────────────────────────────
 function detail(name){
   const s=sess.find(x=>x.name===name); if(!s)return
@@ -1358,12 +1556,14 @@ function detail(name){
    </div>
    <div class="md-a">
      <button id="cf">configurar</button>
+     ${s.status==='WORKING'?'<button id="tc">testar canal</button>':''}
      <button id="rs">reiniciar</button><div class="sp"></div>
      ${s.status!=='WORKING'?`<button id="qq" class="k">conectar</button>`:''}
    </div>`,true)
   o.querySelector('#x').onclick=()=>o.remove()
   o.querySelector('#rs').onclick=()=>{o.remove();act('restart',name)}
   o.querySelector('#cf').onclick=()=>{o.remove();settings(name)}
+  if(o.querySelector('#tc'))o.querySelector('#tc').onclick=()=>{o.remove();testar(name)}
   const qq=o.querySelector('#qq'); if(qq)qq.onclick=()=>{o.remove();qr(name)}
 
   const tw=o.querySelector('#tw')
