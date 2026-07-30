@@ -25,6 +25,8 @@ seu sistema  ──HTTP──▶  ELO  ──▶  WhatsApp
 | | |
 |---|---|
 | **Mensagens** | texto, imagem, vídeo, áudio/voz (PTT), documento, figurinha |
+| **Múltiplos arquivos** | vários numa chamada, legenda por item, ordem preservada |
+| **Álbum** | imagens/vídeos agrupados numa bolha única |
 | **Recebimento** | webhook com mídia baixada e servida por URL própria |
 | **Confirmações** | enviado → entregue → lido, e falha (ack `-1`) |
 | **Reações** | envio e recebimento, como evento próprio |
@@ -107,9 +109,42 @@ curl -X POST http://localhost:3000/api/sendImage \
        "caption":"Confira","file":{"url":"https://exemplo.com/foto.jpg"}}'
 ```
 
-Endpoints de envio: `sendText`, `sendImage`, `sendVideo`, `sendVoice`, `sendFile`, `sendReaction`.
+Endpoints de envio: `sendText`, `sendImage`, `sendVideo`, `sendVoice`, `sendFile`, `sendSticker`, `sendMedia`, `sendReaction`.
 
 Para **áudio de voz** (aparecer como gravação, não como arquivo), envie em `audio/ogg; codecs=opus` via `sendVoice` — é o único formato que o WhatsApp entrega como voice note.
+
+**Vários arquivos numa chamada**
+
+`sendMedia` envia N mídias de uma vez, cada uma com sua legenda. Os envios são **serializados**, então a ordem que você pede é a ordem que o contato vê — o que não acontece disparando requisições em paralelo.
+
+```bash
+curl -X POST http://localhost:3000/api/sendMedia \
+  -H 'X-Api-Key: SUA_CHAVE' -H 'Content-Type: application/json' \
+  -d '{
+    "session":"atendimento","chatId":"5511999999999@c.us",
+    "album": true,
+    "items":[
+      {"file":{"url":"https://exemplo.com/1.jpg"},"caption":"Frente"},
+      {"file":{"url":"https://exemplo.com/2.jpg"},"caption":"Lateral"},
+      {"file":{"url":"https://exemplo.com/manual.pdf","filename":"manual.pdf"},
+       "caption":"Especificações"}
+    ]}'
+```
+
+`album: true` agrupa imagens e vídeos numa **bolha única** (recurso nativo do WhatsApp). Documentos e áudios não entram no álbum — vão como mensagens próprias, na mesma chamada.
+
+A resposta traz um id por item, na ordem enviada, para você casar o ACK de cada um:
+
+```json
+{ "id": "true_...", "count": 3, "album": true,
+  "messages": [{ "id": "true_..." }, { "id": "true_..." }, { "id": "true_..." }] }
+```
+
+Por item: `caption`, `asDocument` (forçar anexo mesmo sendo imagem) e `asVoice`. Sem `caption` no item, vale a `caption` da chamada — aplicada ao primeiro, que é como o WhatsApp mostra a legenda de um álbum. O tipo é escolhido pelo `mimetype`; desconhecido vira documento.
+
+Se **qualquer** arquivo for inválido, nada é enviado e a resposta diz qual item falhou — evita deixar metade entregue e o contato receber duplicado no reenvio. Máximo de 30 itens por chamada.
+
+Os endpoints `sendImage`, `sendVideo` e `sendFile` também aceitam `files: [...]` com o mesmo efeito, para quem já integra não precisar trocar de rota.
 
 **Receber**
 
@@ -147,7 +182,8 @@ Eventos: `message` (recebida), `message.ack` (confirmação de entrega/leitura),
 | `POST` | `/api/sessions/{s}/restart` \| `/stop` | ciclo de vida |
 | `DELETE` | `/api/sessions/{s}` | apaga sessão e pareamento |
 | `GET` | `/api/{s}/auth/qr` | QR (PNG) |
-| `POST` | `/api/sendText` … | envio |
+| `POST` | `/api/sendText` … | envio de um item |
+| `POST` | `/api/sendMedia` | vários arquivos / álbum |
 | `GET` | `/api/contacts/check-exists` | o número tem WhatsApp? |
 | `GET` | `/api/{s}/lids/{lid}` | resolve id oculto → telefone |
 | `GET` | `/api/stats` | contadores por sessão |
@@ -171,7 +207,7 @@ Eventos: `message` (recebida), `message.ack` (confirmação de entrega/leitura),
 ```bash
 npm ci
 npm run dev          # watch
-npm test             # 212 testes
+npm test             # 205 testes
 npm run typecheck
 ```
 

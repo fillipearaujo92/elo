@@ -36,6 +36,16 @@ interface FilePayload {
 const MAX_FILE_BYTES = 64 * 1024 * 1024;
 
 /**
+ * Máximo de arquivos por chamada de /sendMedia.
+ *
+ * Cada item é um upload; os envios são serializados para preservar a ordem, então
+ * uma chamada gigante seguraria o socket da sessão por minutos e atrasaria todas
+ * as outras mensagens dela. 30 cobre com folga o uso real (o WhatsApp mostra no
+ * máximo 10 por álbum) sem virar arma de bloqueio.
+ */
+const MAX_MEDIA_ITEMS = 30;
+
+/**
  * Lê o corpo da resposta contando bytes e abortando ao passar do teto.
  *
  * `content-length` pode faltar (chunked) ou mentir, então não dá para confiar só
@@ -66,6 +76,17 @@ interface SendBody {
   text?: string;
   caption?: string;
   file?: FilePayload;
+  /**
+   * Vários arquivos na MESMA chamada (alternativa a `file`).
+   *
+   * Existe para quem já integra com /sendImage e /sendFile não precisar trocar de
+   * rota só para mandar 3 fotos: `files: [...]` é atendido pelo mesmo caminho do
+   * /sendMedia (envio em série, ordem preservada). Cada item pode ter `caption`
+   * própria; sem ela, vale a `caption` da chamada no primeiro item.
+   */
+  files?: Array<{ url?: string; data?: string; mimetype?: string; filename?: string; caption?: string }>;
+  /** Agrupa imagens/vídeos numa única bolha (recurso nativo do WhatsApp). */
+  album?: boolean;
   /**
    * Id da mensagem citada (reply). Aceita o id SERIALIZADO
    * ("<fromMe>_<chat>_<raw>") ou o cru — o Baileys precisa da key completa, que
@@ -206,6 +227,246 @@ export function registerSendRoutes(app: FastifyInstance, { sessions }: Deps): vo
     };
   }
 
+  /**
+   * Monta o conteúdo Baileys para UMA mídia, decidindo o tipo pelo mimetype.
+   *
+   * Centraliza a regra que estava repetida nos endpoints de envio, para o
+   * /sendMedia não divergir deles (ex.: o PTT precisa de `ptt: true` e mimetype
+   * explícito; o documento precisa de fileName).
+   */
+  function mediaContent(
+    f: { buffer?: Buffer; url?: string; mimetype?: string; filename?: string },
+    opts: { caption?: string; asVoice?: boolean; asDocument?: boolean } = {},
+  ): AnyMessageContent {
+    const src = f.buffer ? f.buffer : { url: f.url! };
+    const mime = (f.mimetype ?? '').toLowerCase();
+    const caption = opts.caption || undefined;
+
+    // Documento explícito ganha de qualquer heurística: é o fallback de quem
+    // quer enviar como anexo mesmo sendo imagem/vídeo.
+    if (opts.asDocument) {
+      return {
+        document: src,
+        mimetype: f.mimetype ?? 'application/octet-stream',
+        fileName: f.filename ?? 'arquivo',
+        caption,
+      } as AnyMessageContent;
+    }
+    if (opts.asVoice || (mime.startsWith('audio/') && opts.asVoice !== false)) {
+      // Voz não aceita caption no WhatsApp — ignorar em silêncio seria pior que
+      // não oferecer, então o endpoint avisa antes de chegar aqui.
+      return {
+        audio: src,
+        ptt: true,
+        mimetype: f.mimetype ?? 'audio/ogg; codecs=opus',
+      } as AnyMessageContent;
+    }
+    if (mime.startsWith('image/')) {
+      // WEBP é sticker no WhatsApp, não imagem — enviar como imagem gera anexo
+      // estranho. Só tratamos como sticker quando não há caption (sticker não
+      // suporta), senão respeitamos a intenção de mandar imagem com legenda.
+      if (mime === 'image/webp' && !caption) {
+        return { sticker: src } as AnyMessageContent;
+      }
+      return { image: src, caption, mimetype: f.mimetype } as AnyMessageContent;
+    }
+    if (mime.startsWith('video/')) {
+      return { video: src, caption, mimetype: f.mimetype } as AnyMessageContent;
+    }
+    // Desconhecido → documento. Melhor um anexo que abre do que um tipo errado.
+    return {
+      document: src,
+      mimetype: f.mimetype ?? 'application/octet-stream',
+      fileName: f.filename ?? 'arquivo',
+      caption,
+    } as AnyMessageContent;
+  }
+
+  // POST /api/sendMedia — VÁRIOS arquivos numa chamada, cada um com sua legenda.
+  //
+  // Por que existe: enviar 5 fotos exigia 5 requisições, e sem controle de ordem
+  // (o WhatsApp entrega na ordem em que recebe; requisições paralelas chegam
+  // embaralhadas). Aqui os itens são enviados em SÉRIE, então a ordem que o
+  // consumidor pediu é a ordem que o contato vê.
+  //
+  // `album: true` agrupa imagens/vídeos numa ÚNICA bolha (recurso nativo do
+  // WhatsApp, exposto pela Baileys 7 via albumParentKey).
+  app.post<{
+    Body: {
+      session?: string;
+      chatId?: string;
+      album?: boolean;
+      caption?: string;
+      reply_to?: string;
+      items?: Array<{
+        file?: FilePayload;
+        caption?: string;
+        asVoice?: boolean;
+        asDocument?: boolean;
+      }>;
+    };
+  }>('/api/sendMedia', async (req) =>
+    sendManyMedia(prepare(req.body), {
+      items: req.body?.items,
+      album: req.body?.album,
+      caption: req.body?.caption,
+      replyTo: req.body?.reply_to,
+    }),
+  );
+
+  /**
+   * Envia N mídias na mesma conversa, em série, preservando a ordem.
+   *
+   * Usado pelo /sendMedia e pelos endpoints antigos quando recebem `files[]`.
+   */
+  async function sendManyMedia(
+    { session, jid }: { session: string; jid: string },
+    opts: {
+      items?: Array<{
+        file?: FilePayload;
+        caption?: string;
+        asVoice?: boolean;
+        asDocument?: boolean;
+      }>;
+      album?: boolean;
+      caption?: string;
+      replyTo?: string;
+      /** Força o tipo (o /sendFile manda tudo como documento, por exemplo). */
+      forceDocument?: boolean;
+      forceVoice?: boolean;
+    },
+  ): Promise<Record<string, unknown>> {
+    const items = opts.items;
+    if (!Array.isArray(items) || items.length === 0) {
+      throw new Boom('items e obrigatorio (lista com pelo menos 1 arquivo)', {
+        statusCode: 400,
+      });
+    }
+    // Teto: cada item vira upload. Sem limite, uma chamada com 500 arquivos
+    // seguraria o socket da sessão por minutos e atrasaria todo o resto.
+    if (items.length > MAX_MEDIA_ITEMS) {
+      throw new Boom(
+        `no maximo ${MAX_MEDIA_ITEMS} arquivos por chamada (recebidos ${items.length})`,
+        { statusCode: 400 },
+      );
+    }
+
+    // Resolve TODOS os arquivos antes de enviar qualquer um: um base64 inválido
+    // no item 4 não deve deixar 3 mensagens já entregues e o resto falhando.
+    const resolvidos = [];
+    for (const [i, item] of items.entries()) {
+      try {
+        resolvidos.push({ f: await resolveFile(item?.file), item });
+      } catch (err) {
+        const msg = (err as Error).message;
+        throw new Boom(`item ${i + 1}: ${msg}`, {
+          statusCode: (err as { output?: { statusCode?: number } })?.output?.statusCode ?? 400,
+        });
+      }
+    }
+
+    const sock = sessions.requireSocket(session);
+
+    // ── Álbum ────────────────────────────────────────────────────────────────
+    // Só imagens e vídeos entram num álbum (regra do WhatsApp). O que não for
+    // vai depois, como mensagem própria.
+    let albumParentKey: unknown;
+    if (opts.album) {
+      const naAlbum = resolvidos.filter((r) => {
+        const m = (r.f.mimetype ?? '').toLowerCase();
+        return (
+          !(r.item?.asDocument ?? opts.forceDocument) &&
+          !(r.item?.asVoice ?? opts.forceVoice) &&
+          (m.startsWith('image/') || m.startsWith('video/')) &&
+          m !== 'image/webp'
+        );
+      });
+      // Álbum de 1 item é uma bolha normal — não vale criar o container.
+      if (naAlbum.length >= 2) {
+        const imagens = naAlbum.filter((r) =>
+          (r.f.mimetype ?? '').toLowerCase().startsWith('image/'),
+        ).length;
+        const parent = await sock.sendMessage(jid, {
+          album: {
+            expectedImageCount: imagens,
+            expectedVideoCount: naAlbum.length - imagens,
+          },
+        } as never);
+        albumParentKey = parent?.key;
+      }
+    }
+
+    // ── Envio em SÉRIE ───────────────────────────────────────────────────────
+    // Sequencial de propósito: é o que garante a ordem no aparelho do contato.
+    const enviados: Array<Record<string, unknown>> = [];
+    for (const [i, { f, item }] of resolvidos.entries()) {
+      const content = mediaContent(f, {
+        // caption do item; o caption da chamada vale para o PRIMEIRO item, que é
+        // como o WhatsApp mostra a legenda de um álbum.
+        caption: item?.caption ?? (i === 0 ? opts.caption : undefined),
+        asVoice: item?.asVoice ?? opts.forceVoice,
+        asDocument: item?.asDocument ?? opts.forceDocument,
+      });
+
+      // Reply só no primeiro: citar a mesma mensagem N vezes poluiria a conversa.
+      const replyTo = i === 0 ? opts.replyTo : undefined;
+      const quoted = buildQuoted(replyTo, jid);
+
+      const podeAlbum =
+        !!albumParentKey &&
+        !(item?.asDocument ?? opts.forceDocument) &&
+        !(item?.asVoice ?? opts.forceVoice) &&
+        !('document' in content);
+      const sent = await sock.sendMessage(
+        jid,
+        podeAlbum ? ({ ...content, albumParentKey } as never) : content,
+        quoted ? ({ quoted } as never) : undefined,
+      );
+
+      if (!sent?.key?.id) {
+        // Falha no meio: reportamos o que JÁ foi enviado. Sem isso o consumidor
+        // reenviaria tudo e o contato receberia duplicado.
+        throw new Boom(
+          `item ${i + 1} nao retornou id; ${enviados.length} de ${resolvidos.length} foram enviados`,
+          { statusCode: 500 },
+        );
+      }
+      await sessions.rememberSentMessage(session, sent.key, sent.message);
+      const id = serializeMsgId(sent.key);
+      enviados.push({
+        id,
+        _data: { id: { id: sent.key.id, _serialized: id }, Info: { ID: sent.key.id } },
+      });
+    }
+
+    return {
+      // `id` do primeiro: mantém o contrato de quem lê um id único da resposta.
+      id: enviados[0]?.id,
+      _data: enviados[0]?._data,
+      to: jid,
+      count: enviados.length,
+      album: !!albumParentKey,
+      // Todos os ids, na ordem enviada — para o consumidor casar ACK por item.
+      messages: enviados,
+      timestamp: Math.floor(Date.now() / 1000),
+    };
+  }
+
+  /**
+   * `files[]` (dos endpoints antigos) no formato de `items[]` do sendMedia.
+   *
+   * Devolve null quando nao ha lista — o chamador segue no caminho de arquivo
+   * unico, que continua valendo para todo consumidor existente.
+   */
+  function asItems(body: SendBody | undefined) {
+    const fs = body?.files;
+    if (!Array.isArray(fs) || fs.length === 0) return null;
+    return fs.map((f) => ({
+      file: { url: f?.url, data: f?.data, mimetype: f?.mimetype, filename: f?.filename },
+      caption: f?.caption,
+    }));
+  }
+
   // POST /api/sendText
   app.post<{ Body: SendBody }>('/api/sendText', async (req) => {
     const { session, jid } = prepare(req.body);
@@ -223,7 +484,16 @@ export function registerSendRoutes(app: FastifyInstance, { sessions }: Deps): vo
 
   // POST /api/sendImage
   app.post<{ Body: SendBody }>('/api/sendImage', async (req) => {
-    const { session, jid } = prepare(req.body);
+    const alvo = prepare(req.body);
+    // `files: [...]` no lugar de `file: {...}`: mesma rota, N imagens.
+    const items = asItems(req.body);
+    if (items) {
+      return sendManyMedia(alvo, {
+        items, album: req.body?.album,
+        caption: req.body?.caption, replyTo: req.body?.reply_to,
+      });
+    }
+    const { session, jid } = alvo;
     const f = await resolveFile(req.body?.file);
     return send(session, jid, {
       image: f.buffer ? f.buffer : { url: f.url! },
@@ -251,7 +521,15 @@ export function registerSendRoutes(app: FastifyInstance, { sessions }: Deps): vo
 
   // POST /api/sendVideo
   app.post<{ Body: SendBody }>('/api/sendVideo', async (req) => {
-    const { session, jid } = prepare(req.body);
+    const alvo = prepare(req.body);
+    const items = asItems(req.body);
+    if (items) {
+      return sendManyMedia(alvo, {
+        items, album: req.body?.album,
+        caption: req.body?.caption, replyTo: req.body?.reply_to,
+      });
+    }
+    const { session, jid } = alvo;
     const f = await resolveFile(req.body?.file);
     return send(session, jid, {
       video: f.buffer ? f.buffer : { url: f.url! },
@@ -264,7 +542,16 @@ export function registerSendRoutes(app: FastifyInstance, { sessions }: Deps): vo
   // Tambem e o fallback do driver quando sendVideo falha (waha.js:100), entao precisa
   // aceitar qualquer mimetype.
   app.post<{ Body: SendBody }>('/api/sendFile', async (req) => {
-    const { session, jid } = prepare(req.body);
+    const alvo = prepare(req.body);
+    const items = asItems(req.body);
+    if (items) {
+      // forceDocument: esta rota e "anexo", entao nao vira imagem por heuristica.
+      return sendManyMedia(alvo, {
+        items, caption: req.body?.caption,
+        replyTo: req.body?.reply_to, forceDocument: true,
+      });
+    }
+    const { session, jid } = alvo;
     const f = await resolveFile(req.body?.file);
     return send(session, jid, {
       document: f.buffer ? f.buffer : { url: f.url! },
