@@ -1,0 +1,75 @@
+# CI — roda em cada push e PR.
+#
+# Os testes NÃO precisam de um Postgres de verdade: o `tests/run.mjs` injeta uma
+# DATABASE_URL falsa e cada suíte stuba o pool. Subir um serviço de banco aqui
+# daria a impressão de cobertura que não existe — a integração real com o Postgres
+# é validada no deploy, contra um banco real.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Permite rodar à mão a partir da aba Actions.
+  workflow_dispatch:
+
+# Um PR que recebe vários pushes cancela as execuções antigas: sem isto a fila
+# enche de builds obsoletos.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # 22 é o mínimo declarado em engines. Se subir o mínimo, suba aqui.
+          node-version: 22
+          cache: npm
+
+      # `npm ci` (não `install`): respeita o lockfile exatamente, então o CI testa
+      # as mesmas versões que o desenvolvedor tem.
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Testes
+        run: npm test
+
+      # O painel é HTML/CSS/JS inline, sem build — nada o valida automaticamente.
+      # Este passo pega erro de sintaxe no JS antes de ir para produção, que é o
+      # tipo de quebra que só apareceria quando alguém abrisse a página.
+      - name: Sintaxe do painel
+        run: |
+          node -e "
+          const fs = require('fs');
+          const html = fs.readFileSync('src/ui/dashboard.html', 'utf8');
+          const m = html.match(/<script>([\s\S]*)<\/script>/);
+          if (!m) { console.error('painel sem <script>'); process.exit(1); }
+          new Function(m[1]);
+          console.log('painel: sintaxe ok');
+          "
+
+  # A imagem tem de continuar buildando. Roda em paralelo aos testes porque não
+  # depende deles: um Dockerfile quebrado é problema independente.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build da imagem
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          # Cache entre execuções: sem isto cada CI recompila tudo do zero.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

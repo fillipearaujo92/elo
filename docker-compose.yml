@@ -11,10 +11,13 @@
 
 services:
   elo:
-    build: .
-    # Para usar a imagem publicada em vez de compilar localmente, troque o
-    # `build: .` acima por:
-    #   image: ghcr.io/fillipearaujo92/elo:latest
+    # Imagem publicada: sobe em segundos, sem precisar compilar nem ter as
+    # ferramentas de build. Multi-arch (amd64 e arm64, cobre Raspberry Pi e Mac
+    # com Apple Silicon).
+    image: ghcr.io/fillipearaujo92/elo:latest
+    # Para compilar a partir deste diretório (desenvolvimento, ou fork com
+    # modificações), comente a linha acima e descomente:
+    # build: .
     restart: unless-stopped
     depends_on:
       db:

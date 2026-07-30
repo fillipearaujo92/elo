@@ -1,5 +1,9 @@
 # ELO
 
+[![CI](https://github.com/fillipearaujo92/elo/actions/workflows/ci.yml/badge.svg)](https://github.com/fillipearaujo92/elo/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](package.json)
+
 Gateway WhatsApp auto-hospedado. Conecta um número via QR code e expõe uma **API REST** para enviar e receber mensagens, além de um **painel web** para operar as sessões.
 
 Roda no seu servidor. O pareamento fica no seu Postgres — nenhum dado passa por serviço de terceiros.
@@ -55,6 +59,10 @@ cd elo
 cp .env.example .env
 ```
 
+> O compose usa a **imagem publicada** (`ghcr.io/fillipearaujo92/elo`), então não
+> precisa compilar nada. Para buildar do código local, comente `image:` e
+> descomente `build: .` no `docker-compose.yml`.
+
 Preencha **duas** linhas no `.env`:
 
 ```bash
@@ -88,6 +96,22 @@ cp .env.example .env      # preencha API_KEY e DATABASE_URL
 npm run build
 npm start                 # o schema é criado no primeiro boot
 ```
+
+## Documentação da API
+
+Com o gateway rodando, abra **<http://localhost:3000/docs>**: Swagger UI com todos
+os endpoints, os campos de cada um e um botão para testar direto do navegador.
+Informe a chave em **Authorize** e as chamadas saem autenticadas.
+
+A spec crua fica em `/openapi.json` (OpenAPI 3.1) — dá para gerar cliente em
+qualquer linguagem, ou importar no Insomnia/Postman.
+
+Os dois são **públicos**: descrevem a forma da API, não expõem dado. Quem for
+testar informa a chave no próprio Swagger.
+
+> A spec vive no código, e um teste compara os caminhos declarados com as rotas
+> registradas. Endpoint novo sem documentação quebra o CI — é o que impede a
+> documentação de apodrecer.
 
 ## Uso
 
@@ -338,7 +362,7 @@ costuma identificar cliente.
 ```bash
 npm ci
 npm run dev          # watch
-npm test             # 263 testes
+npm test             # 276 testes
 npm run typecheck
 ```
 

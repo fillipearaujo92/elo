@@ -18,6 +18,7 @@ import { registerPresenceRoutes } from './routes/presence.js';
 import { registerSessionRoutes } from './routes/sessions.js';
 import { renderPrometheus } from './core/metrics.js';
 import { backupStatus, dumpAuth, restoreAuth, setMark } from './core/backup.js';
+import { buildOpenApi } from './openapi.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -51,11 +52,21 @@ const app = Fastify({
 // si não expõe dado nenhum: ela pede a chave num formulário e só então consome a
 // API (que segue protegida). Servir o HTML atrás de auth exigiria um segundo
 // mecanismo de sessão sem ganho real de segurança.
-const PUBLIC_PATHS = new Set(['/health', '/healthz', '/', '/dashboard']);
+// `/docs` e `/openapi.json` são públicos: são DOCUMENTAÇÃO, e exigir chave para
+// ler a documentação é atrito sem ganho — a spec descreve a forma da API, não
+// expõe dado nenhum. Quem for TESTAR pelo Swagger informa a chave lá.
+const PUBLIC_PATHS = new Set([
+  '/health', '/healthz', '/', '/dashboard', '/docs', '/openapi.json',
+]);
 
 app.addHook('onRequest', async (req, reply) => {
   if (PUBLIC_PATHS.has(req.url.split('?')[0] ?? '')) return;
   if (req.url.startsWith('/api/files/')) return;
+  // ★ Assets do Swagger UI. Sem isto, /docs carregava e o CSS/JS tomava 401 — a
+  // página abria sem estilo e sem funcionar (medido no beta). A lista de arquivos
+  // servidos é fechada (SWAGGER_ASSETS), então liberar o prefixo aqui não expõe
+  // node_modules.
+  if (req.url.startsWith('/docs/')) return;
 
   const key = req.headers['x-api-key'];
   const provided = Array.isArray(key) ? key[0] : key;
@@ -166,6 +177,71 @@ registerSessionRoutes(app, { sessions });
 registerSendRoutes(app, { sessions });
 registerContactRoutes(app, { sessions });
 registerPresenceRoutes(app, { sessions });
+
+// ── Documentação da API ────────────────────────────────────────────────────
+//
+// A spec vive em código (src/openapi.ts) e há um teste que compara os caminhos
+// declarados com as rotas REGISTRADAS no Fastify: endpoint novo sem documentação
+// quebra o CI. Um YAML solto desatualizaria em silêncio.
+app.get('/openapi.json', async (_req, reply) =>
+  reply.type('application/json; charset=utf-8').send(buildOpenApi(VERSION)),
+);
+
+// GET /docs — Swagger UI.
+//
+// ★ Servido do node_modules, NÃO de CDN. Três razões: a instalação pode não ter
+// internet de saída (rede interna é o caso comum de auto-hospedado), carregar
+// script de terceiro numa página que recebe a chave de API é risco desnecessário,
+// e a versão fica presa ao lockfile em vez de mudar sozinha.
+const SWAGGER_DIR = join(here, '..', 'node_modules', 'swagger-ui-dist');
+app.get('/docs', async (_req, reply) => {
+  const html = `<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8">
+<title>ELO — API</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/docs/swagger-ui.css">
+<style>
+  body{margin:0;background:#fafaf9}
+  .topbar{display:none}
+  .swagger-ui .info{margin:26px 0}
+</style>
+</head><body>
+<div id="ui"></div>
+<script src="/docs/swagger-ui-bundle.js"></script>
+<script>
+  window.ui = SwaggerUIBundle({
+    url: '/openapi.json',
+    dom_id: '#ui',
+    // Ordena por tag, na ordem declarada na spec (fluxo: sessão → enviar → …).
+    docExpansion: 'list',
+    defaultModelsExpandDepth: 0,
+    tryItOutEnabled: true,
+    persistAuthorization: true,
+  })
+</script>
+</body></html>`;
+  return reply.type('text/html; charset=utf-8').send(html);
+});
+
+// Assets do Swagger UI. Lista FECHADA de arquivos: servir o diretório inteiro
+// abriria leitura de qualquer coisa sob node_modules.
+const SWAGGER_ASSETS: Record<string, string> = {
+  '/docs/swagger-ui.css': 'text/css; charset=utf-8',
+  '/docs/swagger-ui-bundle.js': 'application/javascript; charset=utf-8',
+};
+for (const [rota, tipo] of Object.entries(SWAGGER_ASSETS)) {
+  app.get(rota, async (_req, reply) => {
+    const arquivo = rota.replace('/docs/', '');
+    const buf = await readFile(join(SWAGGER_DIR, arquivo)).catch(() => null);
+    if (!buf) {
+      return reply.code(404).send({
+        message: 'swagger-ui-dist nao encontrado; rode `npm ci` para instalar',
+      });
+    }
+    // Imutável: o arquivo é da versão travada no lockfile.
+    return reply.type(tipo).header('Cache-Control', 'public, max-age=604800').send(buf);
+  });
+}
 
 // ── Backup do pareamento ───────────────────────────────────────────────────
 // O volume do Postgres É o pareamento: perdê-lo obriga a escanear o QR de todas

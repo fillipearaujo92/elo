@@ -1,0 +1,68 @@
+# Publica a imagem no GitHub Container Registry (ghcr.io).
+#
+# Por que existe: sem imagem publicada, instalar exige compilar — `docker compose
+# up -d` com `build: .` leva minutos e precisa das ferramentas de build. Com a
+# imagem, é download e sobe.
+#
+# Dispara em:
+#   - push na main       → tag `main` (o que está na ponta)
+#   - tag v*             → tags `1.2.3`, `1.2`, `latest` (releases)
+name: Publicar imagem
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+env:
+  # ghcr.io/<owner>/<repo>, tudo em minúsculas (o registry exige).
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Necessário para o GITHUB_TOKEN poder escrever no ghcr.io.
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          # Token automático do Actions: não precisa criar segredo à mão.
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          # `latest` só em tag de versão — não na main. Quem usa `latest` espera
+          # uma versão publicada, não o commit mais recente.
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          # arm64 além de amd64: cobre Raspberry Pi e Mac com Apple Silicon, que é
+          # onde muita gente roda algo auto-hospedado.
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # O commit vai na imagem e aparece em GET /health — é como se descobre
+          # qual código está rodando sem abrir SSH.
+          build-args: |
+            COMMIT_SHA=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
