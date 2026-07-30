@@ -6,6 +6,7 @@
 //   - routes/channels.js do backend (criacao de canal e QR na UI)
 
 import type { FastifyInstance } from 'fastify';
+import { snapshot } from '../core/metrics.js';
 import { uniqueSlug, validateName } from '../core/slug.js';
 import type { SessionManager } from '../core/session-manager.js';
 import type { SessionConfig } from '../core/session-manager.js';
@@ -74,7 +75,19 @@ export function registerSessionRoutes(app: FastifyInstance, { sessions }: Deps):
 
   // GET /api/stats — contadores por sessão, para o painel de operação.
   // Não faz parte do contrato do WAHA; é endpoint próprio.
-  app.get('/api/stats', async () => sessions.stats());
+  // Contadores do banco + metricas em memoria, por sessao. O painel usa isto para
+  // mostrar "esta perdendo mensagem?" sem o operador abrir o Prometheus.
+  app.get('/api/stats', async () => {
+    const base = await sessions.stats();
+    const m = snapshot();
+    const out: Record<string, Record<string, number>> = {};
+    for (const [nome, v] of Object.entries(base)) {
+      out[nome] = { ...v, ...(m[nome] ?? {}) };
+    }
+    // Sessao com metrica mas sem linha (removida agora) ainda aparece.
+    for (const [nome, v] of Object.entries(m)) if (!out[nome]) out[nome] = { ...v };
+    return out;
+  });
 
   // PATCH /api/sessions/{s}/settings — edição parcial das configurações.
   //

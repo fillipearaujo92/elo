@@ -35,6 +35,7 @@ import QRCode from 'qrcode';
 import { config } from '../config.js';
 import { clearAuthState, forgetAuthQueue, usePostgresAuthState } from './auth-state.js';
 import { events } from './events.js';
+import { inc } from './metrics.js';
 import { extractLidPairs, isLid, phoneFromJid, senderPhoneOf } from './lid.js';
 import { MediaStore } from './media.js';
 import { buildAckPayload, buildMessagePayload, buildSessionStatusPayload } from './payload.js';
@@ -220,6 +221,17 @@ export class SessionManager {
   private readonly sessions = new Map<string, LiveSession>();
   /** start() em voo por sessao — evita dois sockets por chamadas concorrentes. */
   private readonly starting = new Map<string, Promise<void>>();
+  /**
+   * Ultima presenca conhecida por sessao+chat.
+   *
+   * O WhatsApp entrega presenca de forma ASSINCRONA depois de uma assinatura: nao
+   * existe chamada sincrona que devolva "visto por ultimo". Guardamos o que chega
+   * para o GET /api/presence responder algo util em vez de nada.
+   *
+   * Em memoria e com TETO: presenca e efemera (vale segundos) e o volume seria
+   * enorme num tenant com milhares de conversas.
+   */
+  private readonly presences = new Map<string, { state: string; lastSeen: number | null; at: number }>();
   private waVersion: [number, number, number] | undefined;
   /**
    * Nome do contato por "<sessao>:<telefone>", alimentado pelos eventos de contato.
@@ -645,6 +657,49 @@ export class SessionManager {
     return this.sessions.get(name);
   }
 
+  /**
+   * Guarda a última presença vista, com TETO de entradas.
+   *
+   * Presença é efêmera e de alto volume (cada "digitando" gera evento). Sem teto,
+   * um tenant com milhares de conversas faria o mapa crescer sem limite — vazamento
+   * silencioso de memória, que é o tipo de defeito que só aparece semanas depois.
+   * Ao encher, descarta as entradas mais antigas.
+   */
+  private rememberPresence(chave: string, state: string, lastSeen: number | null): void {
+    const TETO = 5_000;
+    if (this.presences.size >= TETO && !this.presences.has(chave)) {
+      // Map preserva ordem de inserção: as primeiras chaves são as mais antigas.
+      const excedente = this.presences.size - TETO + 1;
+      let i = 0;
+      for (const k of this.presences.keys()) {
+        this.presences.delete(k);
+        if (++i >= excedente) break;
+      }
+    }
+    this.presences.set(chave, { state, lastSeen, at: Date.now() });
+  }
+
+  /**
+   * Última presença conhecida de um chat. `null` quando nunca chegou evento —
+   * o consumidor precisa distinguir "offline" de "não sei", e devolver
+   * 'unavailable' aqui misturaria as duas coisas.
+   */
+  getPresence(
+    session: string,
+    chatJid: string,
+  ): { presence: string; lastSeen: number | null; updatedAt: number } | null {
+    // 1:1: participante == chat. Em grupo há um por participante; devolvemos o do
+    // próprio chat quando existe, senão o registro mais recente daquele chat.
+    const direta = this.presences.get(`${session}|${chatJid}|${chatJid}`);
+    const achada =
+      direta ??
+      [...this.presences.entries()]
+        .filter(([k]) => k.startsWith(`${session}|${chatJid}|`))
+        .sort((a, b) => b[1].at - a[1].at)[0]?.[1];
+    if (!achada) return null;
+    return { presence: achada.state, lastSeen: achada.lastSeen, updatedAt: achada.at };
+  }
+
   requireSocket(name: string): WASocket {
     const live = this.sessions.get(name);
     if (!live?.sock || live.status !== 'WORKING') {
@@ -855,6 +910,37 @@ export class SessionManager {
     // Doc do Baileys: "message was reacted to. If reaction was removed — then
     // reaction.text will be falsey". Sem escutar isto, a reação do cliente nunca
     // chegava ao Sysled (o consultor não via nada).
+    // ★ Presenca do CONTATO: 'digitando…', online, visto por ultimo.
+    //
+    // Chega so para chats assinados (presenceSubscribe) e so se o contato
+    // permitir na privacidade dele. Guardamos e repassamos como evento para o
+    // consumidor mostrar em tempo real.
+    sock.ev.on('presence.update', (ev) => {
+      if (!atual()) return;
+      const chat = ev?.id;
+      if (!chat) return;
+      for (const [participante, info] of Object.entries(ev.presences ?? {})) {
+        const p = info as { lastKnownPresence?: string; lastSeen?: number };
+        const state = p?.lastKnownPresence ?? 'unavailable';
+        // Em grupo, a presenca e por participante; a chave inclui os dois.
+        const chave = `${live.name}|${chat}|${participante}`;
+        this.rememberPresence(chave, state, p?.lastSeen ?? null);
+
+        this.webhooks
+          .emit(live.config?.webhooks, {
+            event: 'presence.update' as never,
+            session: live.name,
+            payload: {
+              id: toWahaChatId(chat),
+              participant: toWahaChatId(participante),
+              presence: state,
+              lastSeen: p?.lastSeen ?? null,
+            },
+          })
+          .catch(() => {});
+      }
+    });
+
     sock.ev.on('messages.reaction', (reactions) => {
       if (!atual()) return;
       for (const r of reactions) {
@@ -915,6 +1001,7 @@ export class SessionManager {
       // Instante de emissão: o painel calcula a idade real a partir daqui, em vez
       // de cronometrar por conta própria e dessincronizar do WhatsApp.
       live.qrAt = Date.now();
+      inc('qr_total', live.name);
       await this.setStatus(live, 'SCAN_QR_CODE');
       return;
     }
@@ -943,6 +1030,7 @@ export class SessionManager {
       const statusCode =
         (lastDisconnect?.error as Boom | undefined)?.output?.statusCode ?? null;
 
+      inc('disconnect_total', live.name);
       if (live.stopping) {
         await this.setStatus(live, 'STOPPED');
         return;
@@ -1076,6 +1164,7 @@ export class SessionManager {
       { session: live.name, statusCode, attempt: live.reconnectAttempts, delayMs: delay },
       'queda transiente; reconectando com backoff',
     );
+    inc('reconnect_total', live.name);
 
     if (live.reconnectTimer) clearTimeout(live.reconnectTimer);
     live.reconnectTimer = setTimeout(() => {
@@ -1096,7 +1185,10 @@ export class SessionManager {
   private async onInboundMessage(live: LiveSession, msg: WAMessage): Promise<void> {
     const remoteJid = msg.key?.remoteJid ?? '';
     // Filtros por tipo de chat (config.ignore). Ver shouldIgnoreChat.
-    if (shouldIgnoreChat(remoteJid, live.config)) return;
+    if (shouldIgnoreChat(remoteJid, live.config)) {
+      inc('inbound_filtered_total', live.name);
+      return;
+    }
 
     // Mensagens proprias (enviadas pelo celular) sao repassadas: o backend decide o
     // que fazer com fromMe (hoje ignora no inbound, mas o evento e informacao real).
@@ -1136,6 +1228,9 @@ export class SessionManager {
         'Mensagem não decifrada — o WhatsApp deve reenviar; se repetir, a sessão precisa ser repareada',
         { msgId: msg.key?.id, de: remoteJid }, 'error',
       );
+      // ★ O contador que teria denunciado o bug do LID no primeiro minuto, em vez
+      // de esperar alguem mandar uma mensagem e notar que nao chegou.
+      inc('inbound_undecryptable_total', live.name);
       return;
     }
 
@@ -1232,6 +1327,7 @@ export class SessionManager {
       },
     );
 
+    inc('inbound_total', live.name);
     await this.webhooks.emit(live.config?.webhooks, {
       event: 'message',
       session: live.name,
@@ -1443,6 +1539,12 @@ export class SessionManager {
     );
     // Zero linhas = ack repetido ou regressivo; nao emite.
     if (!res.rows.length) return;
+
+    // ★ ack -1 (falhou) e o sinal mais acionavel do sistema: a mensagem SAIU e
+    // nao foi entregue. Separado dos outros para dar alerta proprio.
+    if (ack < 0) inc('ack_failed_total', live.name);
+    else if (ack === 2) inc('ack_delivered_total', live.name);
+    else if (ack >= 3) inc('ack_read_total', live.name);
 
     this.log.debug({ session: live.name, msgId, ack }, 'emitindo message.ack');
     const ackLabel = { [-1]:'falhou', 0:'pendente', 1:'enviada', 2:'entregue', 3:'lida' }[ack] ?? String(ack);

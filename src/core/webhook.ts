@@ -12,6 +12,7 @@
 
 import type { Logger } from 'pino';
 import { events } from './events.js';
+import { inc } from './metrics.js';
 
 export interface WebhookConfig {
   url: string;
@@ -80,6 +81,7 @@ export class WebhookEmitter {
           signal: AbortSignal.timeout(20_000),
         });
         if (res.ok) {
+          inc('webhook_ok_total', event.session);
           if (attempt > 1) {
             events.emit(
               'webhook', event.session,
@@ -97,6 +99,7 @@ export class WebhookEmitter {
             { event: event.event, session: event.session, status: res.status, url: w.url },
             'webhook rejeitado com erro de cliente; nao vou retentar',
           );
+          inc('webhook_rejected_total', event.session);
           events.emit(
             'webhook', event.session,
             `Webhook REJEITADO (HTTP ${res.status}) — evento perdido`,
@@ -123,6 +126,10 @@ export class WebhookEmitter {
       { event: event.event, session: event.session, url: w.url, attempts },
       'webhook esgotou tentativas; evento PERDIDO',
     );
+    // ★ Evento PERDIDO: mensagem que chegou do WhatsApp e nunca alcancou o
+    // consumidor. Junto com inbound_undecryptable_total, sao os dois contadores
+    // que respondem "estou perdendo mensagem?" — a pergunta que importa.
+    inc('webhook_lost_total', event.session);
     events.emit(
       'webhook', event.session,
       `Webhook falhou ${attempts}x — evento PERDIDO`,

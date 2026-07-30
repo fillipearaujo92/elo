@@ -40,6 +40,9 @@ seu sistema  ──HTTP──▶  ELO  ──▶  WhatsApp
 | **Sobrevive a restart** | o pareamento fica no Postgres — reiniciar não pede QR de novo |
 | **Filtros** | ignorar grupos, status/stories, canais, listas de transmissão |
 | **Identidade do contato** | resolve o LID (id oculto) para o telefone real |
+| **Presença** | "digitando…", "gravando…", online/offline, visto por último |
+| **Marcar como lida** | tiques azuis, várias mensagens numa chamada |
+| **Métricas** | Prometheus: perda de mensagem, ACK falho, sessão caída |
 
 ## Instalação
 
@@ -234,9 +237,71 @@ Eventos: `message` (recebida), `message.ack` (confirmação de entrega/leitura),
 | `GET` | `/api/{s}/lids/{lid}` | resolve id oculto → telefone |
 | `GET` | `/api/stats` | contadores por sessão |
 | `GET` | `/api/events` | diagnóstico ao vivo (SSE) |
+| `POST` | `/api/typing` | "digitando…" / "gravando…" |
+| `POST` | `/api/presence` | online/offline, por chat ou global |
+| `POST` | `/api/markAsRead` | marca como lida |
+| `GET` | `/api/presence/{chatId}` | visto por último do contato |
+| `GET` | `/metrics` | métricas Prometheus |
 | `GET` | `/health` | saúde (valida o banco), versão e commit |
 
 `/health` é público; o resto exige a chave. `/api/files/*` também é aberto — os nomes de arquivo são aleatórios e não-adivinháveis, decisão consciente para o consumidor baixar a mídia sem espalhar a credencial.
+
+## Presença: parecer humano
+
+```bash
+# "digitando…" por 8s (o ELO renova sozinho; o WhatsApp expira em ~10s)
+curl -X POST http://localhost:3000/api/typing -H 'X-Api-Key: SUA_CHAVE'   -H 'Content-Type: application/json'   -d '{"session":"atendimento","chatId":"5511999999999@c.us","duration":8000}'
+
+# "gravando áudio…"
+#   -d '{"session":"…","chatId":"…","kind":"recording","duration":5000}'
+
+# marcar como lida (tiques azuis)
+curl -X POST http://localhost:3000/api/markAsRead -H 'X-Api-Key: SUA_CHAVE'   -H 'Content-Type: application/json'   -d '{"session":"atendimento","chatId":"5511999999999@c.us",
+       "messageIds":["false_5511999999999@c.us_3EB0…"]}'
+```
+
+A requisição do `typing` responde **na hora** — a renovação corre em background,
+porque prender o handler por 20s esgotaria conexões num atendimento movimentado.
+
+O contato "digitando" chega a você pelo evento `presence.update` no webhook.
+
+**Visto por último** depende da privacidade do contato: se ele restringe, o WhatsApp
+simplesmente não envia o dado — e é recíproco (quem esconde o seu também não vê o dos
+outros). Nesse caso o ELO devolve `available: false` com a explicação, em vez de
+fingir que a informação existe.
+
+## Observabilidade
+
+`GET /metrics` expõe métricas no formato Prometheus. Os quatro sinais que importam:
+
+```
+elo_inbound_undecryptable_total  > 0   perdendo mensagem AGORA
+elo_webhook_lost_total           > 0   evento nunca alcançou seu sistema
+elo_ack_failed_total             > 0   mensagem saiu e não foi entregue
+elo_session_up{session="…"}      = 0   sessão caída
+```
+
+Isto existe por um motivo concreto: um bug de criptografia derrubou todo o
+recebimento e **só foi descoberto quando alguém mandou uma mensagem e notou a
+ausência** — o gateway já registrava os descartes no log e não avisava ninguém.
+Falha silenciosa é o pior modo de falha de um gateway, e é o que esses contadores
+tornam visível.
+
+Exemplo de alerta (Prometheus):
+
+```yaml
+- alert: EloPerdendoMensagem
+  expr: increase(elo_inbound_undecryptable_total[10m]) > 0
+  annotations:
+    summary: "ELO nao esta decifrando mensagens em {{ $labels.session }}"
+
+- alert: EloSessaoCaida
+  expr: elo_session_up == 0
+  for: 5m
+```
+
+`/metrics` exige a `X-Api-Key`: os nomes das sessões são rótulos, e nome de sessão
+costuma identificar cliente.
 
 ## Notas operacionais
 
@@ -253,7 +318,7 @@ Eventos: `message` (recebida), `message.ack` (confirmação de entrega/leitura),
 ```bash
 npm ci
 npm run dev          # watch
-npm test             # 218 testes
+npm test             # 240 testes
 npm run typecheck
 ```
 

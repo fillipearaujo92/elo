@@ -14,7 +14,9 @@ import { WebhookEmitter } from './core/webhook.js';
 import { migrate, pool } from './db/pool.js';
 import { registerContactRoutes } from './routes/contacts.js';
 import { registerSendRoutes } from './routes/send.js';
+import { registerPresenceRoutes } from './routes/presence.js';
 import { registerSessionRoutes } from './routes/sessions.js';
+import { renderPrometheus } from './core/metrics.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -162,6 +164,30 @@ app.get<{ Querystring: { after?: string } }>('/api/events', async (req, reply) =
 registerSessionRoutes(app, { sessions });
 registerSendRoutes(app, { sessions });
 registerContactRoutes(app, { sessions });
+registerPresenceRoutes(app, { sessions });
+
+// GET /metrics — formato Prometheus.
+//
+// PROTEGIDO por X-Api-Key, ao contrario do /health: os nomes das sessoes sao
+// rotulos, e nome de sessao costuma identificar cliente ("Loja Centro"). Deixar
+// aberto entregaria a lista de clientes a qualquer um.
+//
+// Existe porque a falha que mais dói aqui e SILENCIOSA: o bug que derrubou o
+// inbound (Bad MAC/LID) foi descoberto por alguem mandando mensagem e notando a
+// ausencia. Com `elo_inbound_undecryptable_total > 0` e
+// `elo_webhook_lost_total > 0`, o alerta chega antes do cliente reclamar.
+app.get('/metrics', async (_req, reply) => {
+  const rows = await sessions.listSessions();
+  const estado = [];
+  for (const r of rows) {
+    const live = sessions.getLive(r.name);
+    const status = live?.status ?? r.status;
+    estado.push({ name: r.name, status, connected: status === 'WORKING' });
+  }
+  return reply
+    .type('text/plain; version=0.0.4; charset=utf-8')
+    .send(renderPrometheus(estado));
+});
 
 // GET /api/files/{session}/{filename} — serve a midia inbound baixada.
 app.get<{ Params: { session: string; filename: string } }>(
