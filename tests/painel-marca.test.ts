@@ -43,6 +43,28 @@ describe('painel: variaveis CSS', () => {
   it('--ease existe (tres regras dependem dela, incluindo o pulso)', () => {
     assert.match(css, /--ease:\s*cubic-bezier/);
   });
+
+  it('★ toda animacao declarada aponta para um keyframe que existe', () => {
+    // O outro jeito de uma animação nascer morta: `animation:girar` sem
+    // `@keyframes girar`. Também silencioso — nenhum erro, nada se move.
+    // Medido no Chrome: as 10 animações do painel rodam. Este teste guarda isso.
+    const limpo = css.replace(/\/\*[\s\S]*?\*\//g, '');   // comentários confundem o match
+    const definidos = new Set([...limpo.matchAll(/@keyframes\s+([\w-]+)/g)].map((m) => m[1]!));
+    const usados = [...limpo.matchAll(/animation(?:-name)?:\s*([\w-]+)/g)]
+      .map((m) => m[1]!).filter((n) => n !== 'none');
+    const fantasmas = [...new Set(usados)].filter((u) => !definidos.has(u));
+    assert.deepEqual(fantasmas, [], 'animation aponta para @keyframes inexistente');
+  });
+
+  it('nenhum @keyframes definido fica sem uso', () => {
+    // Keyframe órfão é código morto — ou alguém removeu a regra e esqueceu o
+    // keyframe, ou a regra foi renomeada e a animação parou de existir.
+    const limpo = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    const definidos = [...limpo.matchAll(/@keyframes\s+([\w-]+)/g)].map((m) => m[1]!);
+    const usados = new Set([...limpo.matchAll(/animation(?:-name)?:\s*([\w-]+)/g)]
+      .map((m) => m[1]!));
+    assert.deepEqual(definidos.filter((k) => !usados.has(k)), [], 'keyframes sem uso');
+  });
 });
 
 describe('painel: pulso da marca', () => {
