@@ -196,8 +196,30 @@ describe('OpenAPI: casa com as rotas REAIS', () => {
 
 describe('OpenAPI: o conteudo ajuda quem integra', () => {
   it('avisa sobre a biblioteca nao-oficial na descricao', () => {
-    // Quem lê a spec antes de integrar precisa saber do risco de ban.
-    assert.match(String(spec.info.description), /n[ãa]o-oficial/i);
+    // Quem lê a spec antes de integrar precisa saber do risco de ban. O texto da
+    // spec é em INGLÊS (o público é quem integra, de qualquer país); os comentários
+    // seguem em português porque o público deles é quem mantém.
+    const d = String(spec.info.description);
+    assert.match(d, /unofficial/i, 'tem de dizer que a biblioteca nao e oficial');
+    assert.match(d, /banned/i, 'e que o numero pode ser banido');
+  });
+
+  it('a spec esta em INGLES (nao mistura idioma)', () => {
+    // Documentação meio-traduzida é pior que documentação num idioma só: o leitor
+    // trava na primeira frase que não entende. Este teste pega a mistura.
+    const alvos: string[] = [String(spec.info.description)];
+    for (const [caminho, ops] of Object.entries(spec.paths)) {
+      for (const [met, op] of Object.entries(ops)) {
+        if (met === 'parameters') continue;
+        const o = op as { summary?: string; description?: string };
+        if (o.summary) alvos.push(`${caminho} summary: ${o.summary}`);
+        if (o.description) alvos.push(`${caminho} description: ${o.description}`);
+      }
+    }
+    // Palavras que só aparecem em texto português — e que não são termo técnico.
+    const PT = /(sess[ãa]o|mensagem|n[úu]mero|arquivo|configura[çc][ãa]o|entrega|enviar|remetente|telefone|aparelho|contato|chave|erro|falha|obrigat[óo]rio)/i;
+    const suspeitos = alvos.filter((t) => PT.test(t));
+    assert.deepEqual(suspeitos, [], 'texto em portugues na spec (deve ser ingles)');
   });
 
   it('sendText documenta que text vazio e 400', () => {
@@ -207,10 +229,20 @@ describe('OpenAPI: o conteudo ajuda quem integra', () => {
   });
 
   it('as rotas destrutivas avisam na descricao', () => {
+    // Apagar sessão e restaurar backup são irreversíveis; quem lê a spec tem de
+    // saber ANTES de chamar.
     const del = spec.paths['/api/sessions/{session}']!.delete as { description?: string };
-    assert.match(String(del.description), /irrevers|QR/i);
+    assert.match(String(del.description), /irreversible|QR/i);
     const rest = spec.paths['/api/backup/restore']?.post as { description?: string } | undefined;
-    if (rest) assert.match(String(rest.description), /DESTRUTIVO|substitui/i);
+    if (rest) assert.match(String(rest.description), /DESTRUCTIVE|replaces/i);
+  });
+
+  it('o backup avisa que contem as chaves do WhatsApp', () => {
+    // O arquivo circula (e-mail, Drive, pendrive) — o aviso tem de estar na spec,
+    // não só no arquivo.
+    const b = spec.paths['/api/backup']?.get as { description?: string } | undefined;
+    assert.match(String(b?.description), /keys/i);
+    assert.match(String(b?.description), /impersonate/i);
   });
 
   it('/health e publico na spec (security vazio)', () => {

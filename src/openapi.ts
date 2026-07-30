@@ -9,38 +9,41 @@
 // um teste que compara os caminhos declarados com as rotas REGISTRADAS no Fastify
 // (tests/openapi.test.ts) — endpoint novo sem documentação quebra o CI.
 //
-// Escrita à mão em vez de gerada por decorators/plugin: o projeto não usa schema
-// de validação do Fastify (a validação é explícita nos handlers, com mensagens em
-// português para o operador). Um gerador produziria uma spec vazia de significado.
+// ── Por que o CONTEÚDO está em inglês ──────────────────────────────────────
+// Os comentários deste arquivo são para quem MANTÉM o gateway (português, como o
+// resto do código). As descrições dentro da spec são para quem INTEGRA — e um
+// projeto open-source só é utilizável por quem lê o idioma da documentação.
+// Inglês na spec amplia quem consegue usar; os comentários seguem em português
+// porque o público deles é outro.
 
 export function buildOpenApi(version: string): Record<string, unknown> {
   // Componentes reutilizados. Declarar uma vez evita a spec divergir de si mesma.
   const chatId = {
     type: 'string',
     description:
-      'Destino no formato `<telefone>@c.us` (com país, sem + nem espaços). ' +
-      'Grupo: `<id>@g.us`. Canal: `<id>@newsletter`.',
+      'Recipient as `<phone>@c.us` (country code included, digits only — no `+`, no ' +
+      'spaces). Group: `<id>@g.us`. Channel: `<id>@newsletter`.',
     examples: ['5511999999999@c.us'],
   };
   const sessionName = {
     type: 'string',
-    description: 'Id técnico da sessão (o campo `name` que a criação devolveu).',
-    examples: ['atendimento'],
+    description: 'Technical session id — the `name` field returned when the session was created.',
+    examples: ['support'],
   };
   const file = {
     type: 'object',
     description:
-      'Arquivo por URL ou base64. `url` é baixada pelo gateway (teto de 64MB); ' +
-      '`data` aceita base64 puro ou data URL.',
+      'File by URL or base64. `url` is downloaded by the gateway (64MB cap); `data` ' +
+      'accepts raw base64 or a data URL.',
     properties: {
-      url: { type: 'string', examples: ['https://exemplo.com/foto.jpg'] },
-      data: { type: 'string', description: 'base64 ou data:<mime>;base64,…' },
+      url: { type: 'string', examples: ['https://example.com/photo.jpg'] },
+      data: { type: 'string', description: 'base64, or data:<mime>;base64,…' },
       mimetype: { type: 'string', examples: ['image/jpeg'] },
-      filename: { type: 'string', examples: ['orcamento.pdf'] },
+      filename: { type: 'string', examples: ['quote.pdf'] },
     },
   };
   const enviado = {
-    description: 'Mensagem aceita pelo WhatsApp.',
+    description: 'Message accepted by WhatsApp.',
     content: {
       'application/json': {
         schema: {
@@ -50,12 +53,12 @@ export function buildOpenApi(version: string): Record<string, unknown> {
             id: {
               type: 'string',
               description:
-                'Id serializado `<fromMe>_<chatId>_<idCru>`. **Guarde-o**: é como ' +
-                'você casa o ACK que chega depois no webhook.',
+                'Serialized id `<fromMe>_<chatId>_<rawId>`. **Keep it** — this is how you ' +
+                'match the delivery ACK that arrives later on your webhook.',
               examples: ['true_5511999999999@c.us_3EB0AF79BCE4EB'],
             },
             to: { type: 'string' },
-            timestamp: { type: 'integer' },
+            timestamp: { type: 'integer', description: 'Unix seconds.' },
           },
         },
       },
@@ -73,13 +76,13 @@ export function buildOpenApi(version: string): Record<string, unknown> {
     },
   });
   const naoConectada = erro(
-    'Sessão não está conectada. O corpo diz o status atual — veja GET /api/sessions.',
+    'Session is not connected. The body states the current status — see GET /api/sessions.',
   );
 
   /** Endpoint de envio de mídia (os 5 seguem o mesmo formato). */
   const envioMidia = (nome: string, resumo: string, extras: Record<string, unknown> = {}) => ({
     post: {
-      tags: ['Enviar'],
+      tags: ['Send'],
       summary: resumo,
       operationId: nome,
       requestBody: {
@@ -96,18 +99,18 @@ export function buildOpenApi(version: string): Record<string, unknown> {
                 files: {
                   type: 'array',
                   description:
-                    'Vários arquivos numa chamada (alternativa a `file`). Enviados em ' +
-                    'série, então a ordem é preservada. Cada item aceita `caption`.',
+                    'Several files in one call (alternative to `file`). Sent serially, so ' +
+                    'order is preserved. Each item accepts its own `caption`.',
                   items: file,
                 },
-                caption: { type: 'string', description: 'Legenda.' },
+                caption: { type: 'string', description: 'Caption.' },
                 album: {
                   type: 'boolean',
-                  description: 'Agrupa imagens/vídeos numa bolha única.',
+                  description: 'Groups images/videos into a single bubble.',
                 },
                 reply_to: {
                   type: 'string',
-                  description: 'Id da mensagem citada (o `id` que um envio devolveu).',
+                  description: 'Id of the quoted message (the `id` a previous send returned).',
                 },
                 ...extras,
               },
@@ -117,8 +120,8 @@ export function buildOpenApi(version: string): Record<string, unknown> {
       },
       responses: {
         200: enviado,
-        400: erro('Entrada inválida (arquivo ausente, base64 malformado, etc.).'),
-        413: erro('Arquivo acima do limite.'),
+        400: erro('Invalid input (missing file, malformed base64, and so on).'),
+        413: erro('File above the size limit.'),
         422: naoConectada,
       },
     },
@@ -127,47 +130,57 @@ export function buildOpenApi(version: string): Record<string, unknown> {
   return {
     openapi: '3.1.0',
     info: {
-      title: 'ELO — API',
+      title: 'ELO — WhatsApp Gateway API',
       version,
       description:
-        'Gateway WhatsApp auto-hospedado.\n\n' +
-        '**Autenticação:** todas as rotas exigem o header `X-Api-Key`, exceto ' +
-        '`/health`, `/docs`, `/openapi.json`, o painel e `/api/files/*`.\n\n' +
-        '**Aviso:** usa uma biblioteca não-oficial do WhatsApp. Números podem ser ' +
-        'banidos; não use para disparo em massa.',
+        'Self-hosted WhatsApp gateway.\n\n' +
+        '**Authentication:** every route requires the `X-Api-Key` header, except ' +
+        '`/health`, `/docs`, `/openapi.json`, the web panel and `/api/files/*`.\n\n' +
+        '**Getting started:** create a session, scan the QR code, then send and receive. ' +
+        'Incoming messages are delivered to the webhook URL you configure on the session.\n\n' +
+        '**Warning:** this gateway uses an unofficial WhatsApp library. It is not approved ' +
+        'or supported by WhatsApp/Meta, and numbers can be banned — especially new numbers ' +
+        'or high volume to contacts who never interacted. Do not use it for bulk messaging ' +
+        'or spam.',
       license: { name: 'MIT', identifier: 'MIT' },
     },
-    servers: [{ url: '/', description: 'Este gateway' }],
+    servers: [{ url: '/', description: 'This gateway' }],
     tags: [
-      { name: 'Sessões', description: 'Conectar números, QR, status e configuração.' },
-      { name: 'Enviar', description: 'Texto, mídia, reações.' },
-      { name: 'Mensagens', description: 'Operar sobre mensagem já enviada.' },
-      { name: 'Presença', description: '"digitando…", online, marcar como lida.' },
-      { name: 'Contatos', description: 'Verificar número, resolver id oculto.' },
-      { name: 'Operação', description: 'Saúde, métricas, backup, diagnóstico.' },
+      { name: 'Sessions', description: 'Connect numbers, QR code, status and configuration.' },
+      { name: 'Send', description: 'Text, media, reactions.' },
+      { name: 'Messages', description: 'Act on a message already sent.' },
+      { name: 'Presence', description: 'Typing indicator, online state, mark as read.' },
+      { name: 'Contacts', description: 'Check a number, resolve hidden ids.' },
+      { name: 'Operations', description: 'Health, metrics, backup, live diagnostics.' },
     ],
     components: {
       securitySchemes: {
         ApiKey: { type: 'apiKey', in: 'header', name: 'X-Api-Key' },
       },
       schemas: {
-        Sessao: {
+        Session: {
           type: 'object',
           properties: {
-            name: { type: 'string', description: 'Id técnico (use nas chamadas).' },
-            label: { type: 'string', description: 'Nome livre que o operador escolheu.' },
+            name: { type: 'string', description: 'Technical id — use this in API calls.' },
+            label: { type: 'string', description: 'Free-form name chosen by the operator.' },
             status: {
               type: 'string',
+              description:
+                'WORKING = connected. SCAN_QR_CODE = needs pairing. FAILED = dropped ' +
+                '(reconnects on its own when the pairing is still valid).',
               enum: ['STOPPED', 'STARTING', 'SCAN_QR_CODE', 'WORKING', 'FAILED'],
             },
             me: {
               type: ['object', 'null'],
-              description: 'Número pareado. `null` = precisa de QR.',
+              description: 'Paired number. `null` means a QR scan is required.',
               properties: { id: { type: 'string' }, pushName: { type: ['string', 'null'] } },
             },
             engine: { type: 'object', properties: { engine: { type: 'string' } } },
-            shouldStart: { type: 'boolean' },
-            hasQr: { type: 'boolean' },
+            shouldStart: {
+              type: 'boolean',
+              description: 'Whether the session starts automatically with the service.',
+            },
+            hasQr: { type: 'boolean', description: 'A QR code is available right now.' },
             reconnectAttempts: { type: 'integer' },
           },
         },
@@ -178,29 +191,29 @@ export function buildOpenApi(version: string): Record<string, unknown> {
       // ── Sessões ──────────────────────────────────────────────────────────
       '/api/sessions': {
         get: {
-          tags: ['Sessões'],
-          summary: 'Lista as sessões',
-          description: 'Segredos vêm mascarados (`••••••••`).',
-          operationId: 'listarSessoes',
+          tags: ['Sessions'],
+          summary: 'List sessions',
+          description: 'Secrets come back masked (`••••••••`).',
+          operationId: 'listSessions',
           responses: {
             200: {
-              description: 'Lista.',
+              description: 'The sessions.',
               content: {
                 'application/json': {
-                  schema: { type: 'array', items: { $ref: '#/components/schemas/Sessao' } },
+                  schema: { type: 'array', items: { $ref: '#/components/schemas/Session' } },
                 },
               },
             },
           },
         },
         post: {
-          tags: ['Sessões'],
-          summary: 'Cria (e inicia) uma sessão',
+          tags: ['Sessions'],
+          summary: 'Create (and start) a session',
           description:
-            'O `name` é livre: aceita espaços, acentos, maiúsculas e emoji. O gateway ' +
-            'deriva um id técnico seguro e devolve os dois — **use o `name` da resposta** ' +
-            'nas outras chamadas.',
-          operationId: 'criarSessao',
+            '`name` is free-form: spaces, accents, uppercase and emoji are all fine. The ' +
+            'gateway derives a safe technical id and returns both — **use the `name` from ' +
+            'the response** in every other call.',
+          operationId: 'createSession',
           requestBody: {
             required: true,
             content: {
@@ -209,13 +222,14 @@ export function buildOpenApi(version: string): Record<string, unknown> {
                   type: 'object',
                   required: ['name'],
                   properties: {
-                    name: { type: 'string', examples: ['Atendimento'] },
+                    name: { type: 'string', examples: ['Support'] },
                     start: { type: 'boolean', default: true },
                     config: {
                       type: 'object',
                       properties: {
                         webhooks: {
                           type: 'array',
+                          description: 'Where incoming events are delivered.',
                           items: {
                             type: 'object',
                             properties: {
@@ -224,18 +238,32 @@ export function buildOpenApi(version: string): Record<string, unknown> {
                                 type: 'array',
                                 items: {
                                   type: 'string',
-                                  enum: ['message', 'message.ack', 'session.status', 'presence.update'],
+                                  enum: [
+                                    'message',
+                                    'message.ack',
+                                    'session.status',
+                                    'presence.update',
+                                  ],
                                 },
                               },
                               customHeaders: {
                                 type: 'array',
+                                description:
+                                  'Sent with every webhook call. Use it to authenticate the ' +
+                                  'gateway on your side.',
                                 items: {
                                   type: 'object',
-                                  properties: { name: { type: 'string' }, value: { type: 'string' } },
+                                  properties: {
+                                    name: { type: 'string' },
+                                    value: { type: 'string' },
+                                  },
                                 },
                               },
                               retries: {
                                 type: 'object',
+                                description:
+                                  'Retry policy. 4xx responses are NOT retried — a contract ' +
+                                  'error would only queue garbage.',
                                 properties: {
                                   attempts: { type: 'integer', minimum: 1, maximum: 60 },
                                   delaySeconds: { type: 'integer', minimum: 1, maximum: 300 },
@@ -246,10 +274,14 @@ export function buildOpenApi(version: string): Record<string, unknown> {
                         },
                         ignore: {
                           type: 'object',
-                          description: 'Tipos de chat a NÃO repassar.',
+                          description: 'Chat types NOT to forward to your webhook.',
                           properties: {
                             groups: { type: 'boolean' },
-                            status: { type: 'boolean', default: true },
+                            status: {
+                              type: 'boolean',
+                              default: true,
+                              description: 'Stories. Ignored by default.',
+                            },
                             channels: { type: 'boolean' },
                             broadcast: { type: 'boolean' },
                           },
@@ -263,60 +295,60 @@ export function buildOpenApi(version: string): Record<string, unknown> {
           },
           responses: {
             201: {
-              description: 'Criada.',
+              description: 'Created.',
               content: {
-                'application/json': { schema: { $ref: '#/components/schemas/Sessao' } },
+                'application/json': { schema: { $ref: '#/components/schemas/Session' } },
               },
             },
-            400: erro('Nome inválido.'),
-            422: erro('Sessão já existe (benigno: reaplique o config via PUT).'),
+            400: erro('Invalid name.'),
+            422: erro('Session already exists (harmless — reapply the config via PUT).'),
           },
         },
       },
       '/api/sessions/{session}': {
         parameters: [{ name: 'session', in: 'path', required: true, schema: sessionName }],
         get: {
-          tags: ['Sessões'],
-          summary: 'Estado da sessão',
-          operationId: 'obterSessao',
+          tags: ['Sessions'],
+          summary: 'Session state',
+          operationId: 'getSession',
           responses: {
             200: {
-              description: 'Estado.',
-              content: { 'application/json': { schema: { $ref: '#/components/schemas/Sessao' } } },
+              description: 'Current state.',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/Session' } } },
             },
-            404: erro('Não encontrada.'),
+            404: erro('Not found.'),
           },
         },
         put: {
-          tags: ['Sessões'],
-          summary: 'Substitui o config',
+          tags: ['Sessions'],
+          summary: 'Replace the config',
           description:
-            'Substitui o objeto inteiro. Para edição parcial use PATCH /settings — ' +
-            'é mais seguro (faz merge).',
-          operationId: 'substituirConfig',
+            'Replaces the whole object. For partial edits use PATCH /settings — it merges, ' +
+            'so touching the webhook will not wipe your chat filters.',
+          operationId: 'replaceConfig',
           requestBody: {
             required: true,
             content: { 'application/json': { schema: { type: 'object' } } },
           },
-          responses: { 200: { description: 'Atualizada.' }, 404: erro('Não encontrada.') },
+          responses: { 200: { description: 'Updated.' }, 404: erro('Not found.') },
         },
         delete: {
-          tags: ['Sessões'],
-          summary: 'Apaga a sessão e o pareamento',
-          description: 'Irreversível: exigirá novo QR.',
-          operationId: 'apagarSessao',
-          responses: { 200: { description: 'Apagada.' }, 404: erro('Não encontrada.') },
+          tags: ['Sessions'],
+          summary: 'Delete the session and its pairing',
+          description: 'Irreversible: a new QR scan will be required.',
+          operationId: 'deleteSession',
+          responses: { 200: { description: 'Deleted.' }, 404: erro('Not found.') },
         },
       },
       '/api/sessions/{session}/settings': {
         parameters: [{ name: 'session', in: 'path', required: true, schema: sessionName }],
         patch: {
-          tags: ['Sessões'],
-          summary: 'Edita a configuração (merge)',
+          tags: ['Sessions'],
+          summary: 'Edit configuration (merge)',
           description:
-            'Só os campos enviados mudam. A chave do webhook nunca volta em claro; ' +
-            'reenviar o valor mascarado preserva a original.',
-          operationId: 'editarConfig',
+            'Only the fields you send change. The webhook key never comes back in clear ' +
+            'text; sending the masked value back preserves the original.',
+          operationId: 'updateSettings',
           requestBody: {
             required: true,
             content: {
@@ -324,7 +356,7 @@ export function buildOpenApi(version: string): Record<string, unknown> {
                 schema: {
                   type: 'object',
                   properties: {
-                    label: { type: 'string' },
+                    label: { type: 'string', description: 'Display name (the technical id never changes).' },
                     shouldStart: { type: 'boolean' },
                     ignoreGroups: { type: 'boolean' },
                     ignoreStatus: { type: 'boolean' },
@@ -332,7 +364,7 @@ export function buildOpenApi(version: string): Record<string, unknown> {
                     ignoreBroadcast: { type: 'boolean' },
                     webhookUrl: {
                       type: ['string', 'null'],
-                      description: 'Vazio/null remove o repasse.',
+                      description: 'Empty or null removes forwarding.',
                     },
                     webhookEvents: { type: 'array', items: { type: 'string' } },
                     webhookKey: { type: 'string' },
@@ -356,52 +388,53 @@ export function buildOpenApi(version: string): Record<string, unknown> {
             },
           },
           responses: {
-            200: { description: 'Atualizada.' },
-            400: erro('Valor fora da faixa ou URL inválida.'),
-            404: erro('Não encontrada.'),
+            200: { description: 'Updated.' },
+            400: erro('Value out of range, or invalid URL.'),
+            404: erro('Not found.'),
           },
         },
       },
       '/api/sessions/{session}/start': {
         parameters: [{ name: 'session', in: 'path', required: true, schema: sessionName }],
         post: {
-          tags: ['Sessões'],
-          summary: 'Inicia a sessão',
-          operationId: 'iniciarSessao',
-          responses: { 200: { description: 'Aceito.' }, 404: erro('Não encontrada.') },
+          tags: ['Sessions'],
+          summary: 'Start the session',
+          description: 'Returns as soon as the command is accepted — connecting takes seconds.',
+          operationId: 'startSession',
+          responses: { 200: { description: 'Accepted.' }, 404: erro('Not found.') },
         },
       },
       '/api/sessions/{session}/restart': {
         parameters: [{ name: 'session', in: 'path', required: true, schema: sessionName }],
         post: {
-          tags: ['Sessões'],
-          summary: 'Reinicia (mantém o pareamento)',
-          operationId: 'reiniciarSessao',
-          responses: { 200: { description: 'Aceito.' }, 404: erro('Não encontrada.') },
+          tags: ['Sessions'],
+          summary: 'Restart (keeps the pairing)',
+          operationId: 'restartSession',
+          responses: { 200: { description: 'Accepted.' }, 404: erro('Not found.') },
         },
       },
       '/api/sessions/{session}/stop': {
         parameters: [{ name: 'session', in: 'path', required: true, schema: sessionName }],
         post: {
-          tags: ['Sessões'],
-          summary: 'Para (sem apagar o pareamento)',
-          operationId: 'pararSessao',
-          responses: { 200: { description: 'Parada.' }, 404: erro('Não encontrada.') },
+          tags: ['Sessions'],
+          summary: 'Stop (without deleting the pairing)',
+          operationId: 'stopSession',
+          responses: { 200: { description: 'Stopped.' }, 404: erro('Not found.') },
         },
       },
       '/api/sessions/{session}/test-webhook': {
         parameters: [{ name: 'session', in: 'path', required: true, schema: sessionName }],
         post: {
-          tags: ['Sessões'],
-          summary: 'Testa o webhook configurado',
+          tags: ['Sessions'],
+          summary: 'Test the configured webhook',
           description:
-            'Dispara um evento inócuo ao destino e devolve o resultado real — status, ' +
-            'latência e uma dica quando falha. Roda no servidor, então reflete o que ' +
-            'acontece na entrega de verdade.',
-          operationId: 'testarWebhook',
+            'Fires a harmless event at your endpoint and reports the real result — status, ' +
+            'latency, and a hint when it fails. It runs server-side, so it reflects what ' +
+            'actually happens during delivery. Worth doing before you rely on the channel.',
+          operationId: 'testWebhook',
           responses: {
             200: {
-              description: 'Resultado do teste (`ok: false` também vem com 200).',
+              description: 'Test result (a failure also returns 200, with `ok: false`).',
               content: {
                 'application/json': {
                   schema: {
@@ -416,24 +449,24 @@ export function buildOpenApi(version: string): Record<string, unknown> {
                 },
               },
             },
-            422: erro('Sessão sem webhook configurado.'),
+            422: erro('Session has no webhook configured.'),
           },
         },
       },
       '/api/{session}/auth/qr': {
         parameters: [{ name: 'session', in: 'path', required: true, schema: sessionName }],
         get: {
-          tags: ['Sessões'],
-          summary: 'QR code para pareamento',
+          tags: ['Sessions'],
+          summary: 'QR code for pairing',
           description:
-            'Com `Accept: application/json` devolve `{ mimetype, data }` (base64 do PNG) ' +
-            'mais `issuedAt`/`ageMs` — use-os para saber a idade real do código, que o ' +
-            'WhatsApp renova em ritmo próprio. Sem o header, devolve o PNG binário.',
-          operationId: 'obterQr',
+            'With `Accept: application/json` you get `{ mimetype, data }` (base64 PNG) plus ' +
+            '`issuedAt`/`ageMs` — use those to know the code\'s real age, since WhatsApp ' +
+            'rotates it on its own schedule. Without the header, the raw PNG is returned.',
+          operationId: 'getQrCode',
           responses: {
-            200: { description: 'QR disponível.' },
-            404: erro('Sessão não encontrada.'),
-            422: erro('QR indisponível (já conectada, ou ainda subindo).'),
+            200: { description: 'QR code available.' },
+            404: erro('Session not found.'),
+            422: erro('No QR available (already connected, or still starting up).'),
           },
         },
       },
@@ -441,8 +474,8 @@ export function buildOpenApi(version: string): Record<string, unknown> {
       // ── Enviar ───────────────────────────────────────────────────────────
       '/api/sendText': {
         post: {
-          tags: ['Enviar'],
-          summary: 'Envia texto',
+          tags: ['Send'],
+          summary: 'Send a text message',
           operationId: 'sendText',
           requestBody: {
             required: true,
@@ -463,29 +496,30 @@ export function buildOpenApi(version: string): Record<string, unknown> {
           },
           responses: {
             200: enviado,
-            400: erro('Texto vazio ou campo ausente.'),
+            400: erro('Empty text or missing field.'),
             422: naoConectada,
           },
         },
       },
-      '/api/sendImage': envioMidia('sendImage', 'Envia imagem'),
-      '/api/sendVideo': envioMidia('sendVideo', 'Envia vídeo'),
-      '/api/sendFile': envioMidia('sendFile', 'Envia documento/anexo'),
-      '/api/sendSticker': envioMidia('sendSticker', 'Envia figurinha (WEBP)'),
+      '/api/sendImage': envioMidia('sendImage', 'Send an image'),
+      '/api/sendVideo': envioMidia('sendVideo', 'Send a video'),
+      '/api/sendFile': envioMidia('sendFile', 'Send a document or attachment'),
+      '/api/sendSticker': envioMidia('sendSticker', 'Send a sticker (WEBP)'),
       '/api/sendVoice': envioMidia(
         'sendVoice',
-        'Envia áudio como nota de voz (PTT)',
+        'Send audio as a voice note (PTT)',
         {},
       ),
       '/api/sendMedia': {
         post: {
-          tags: ['Enviar'],
-          summary: 'Envia VÁRIOS arquivos numa chamada',
+          tags: ['Send'],
+          summary: 'Send SEVERAL files in one call',
           description:
-            'Enviados em série, então a ordem que você pede é a que o contato vê. ' +
-            '`album: true` agrupa imagens/vídeos numa bolha única. Se qualquer arquivo ' +
-            'for inválido, **nada** é enviado e a resposta diz qual item falhou — evita ' +
-            'deixar metade entregue. Máximo de 30 itens.',
+            'Files are sent serially, so the order you ask for is the order the contact ' +
+            'sees. `album: true` groups images and videos into a single bubble.\n\n' +
+            'If **any** file is invalid, nothing is sent and the response names the failing ' +
+            'item — this avoids leaving half the batch delivered and the contact receiving ' +
+            'duplicates on retry. Maximum 30 items.',
           operationId: 'sendMedia',
           requestBody: {
             required: true,
@@ -498,7 +532,11 @@ export function buildOpenApi(version: string): Record<string, unknown> {
                     session: sessionName,
                     chatId,
                     album: { type: 'boolean' },
-                    caption: { type: 'string', description: 'Aplicada ao primeiro item.' },
+                    caption: {
+                      type: 'string',
+                      description:
+                        'Applied to the first item — that is how WhatsApp shows an album caption.',
+                    },
                     reply_to: { type: 'string' },
                     items: {
                       type: 'array',
@@ -512,9 +550,9 @@ export function buildOpenApi(version: string): Record<string, unknown> {
                           caption: { type: 'string' },
                           asDocument: {
                             type: 'boolean',
-                            description: 'Força anexo mesmo sendo imagem.',
+                            description: 'Force an attachment even for an image.',
                           },
-                          asVoice: { type: 'boolean', description: 'Força nota de voz.' },
+                          asVoice: { type: 'boolean', description: 'Force a voice note.' },
                         },
                       },
                     },
@@ -525,18 +563,18 @@ export function buildOpenApi(version: string): Record<string, unknown> {
           },
           responses: {
             200: {
-              description: 'Enviados.',
+              description: 'Sent.',
               content: {
                 'application/json': {
                   schema: {
                     type: 'object',
                     properties: {
-                      id: { type: 'string', description: 'Id do primeiro item.' },
+                      id: { type: 'string', description: 'Id of the first item.' },
                       count: { type: 'integer' },
                       album: { type: 'boolean' },
                       messages: {
                         type: 'array',
-                        description: 'Um id por item, na ordem enviada.',
+                        description: 'One id per item, in the order sent — match each ACK.',
                         items: { type: 'object', properties: { id: { type: 'string' } } },
                       },
                     },
@@ -544,18 +582,18 @@ export function buildOpenApi(version: string): Record<string, unknown> {
                 },
               },
             },
-            400: erro('Item inválido — nada foi enviado. A mensagem diz qual.'),
-            413: erro('Arquivos somam acima do limite agregado.'),
+            400: erro('An item is invalid — nothing was sent. The message says which one.'),
+            413: erro('Files exceed the aggregate size limit.'),
             422: naoConectada,
           },
         },
       },
       '/api/reaction': {
         post: {
-          tags: ['Enviar'],
-          summary: 'Reage a uma mensagem (ou remove a reação)',
-          description: '`reaction` vazio REMOVE a reação — é como o WhatsApp modela isso.',
-          operationId: 'reaction',
+          tags: ['Send'],
+          summary: 'React to a message (or remove the reaction)',
+          description: 'An empty `reaction` REMOVES it — that is how WhatsApp models un-reacting.',
+          operationId: 'sendReaction',
           requestBody: {
             required: true,
             content: {
@@ -566,25 +604,26 @@ export function buildOpenApi(version: string): Record<string, unknown> {
                   properties: {
                     session: sessionName,
                     messageId: { type: 'string' },
-                    chatId: { type: 'string', description: 'Necessário se o id for cru.' },
+                    chatId: { type: 'string', description: 'Required if the id is a raw id.' },
                     reaction: { type: 'string', examples: ['👍'] },
                   },
                 },
               },
             },
           },
-          responses: { 200: { description: 'Aplicada.' }, 400: erro('Id inválido.') },
+          responses: { 200: { description: 'Applied.' }, 400: erro('Invalid id.') },
         },
       },
 
       // ── Mensagens ────────────────────────────────────────────────────────
       '/api/editMessage': {
         post: {
-          tags: ['Mensagens'],
-          summary: 'Edita o texto de mensagem enviada',
+          tags: ['Messages'],
+          summary: 'Edit the text of a sent message',
           description:
-            'Limites do WhatsApp: só mensagem própria, apenas texto/legenda, e ~15 ' +
-            'minutos. Passado o prazo o servidor ignora sem devolver erro.',
+            'WhatsApp limits: your own messages only, text/caption only (media cannot be ' +
+            'swapped), and roughly 15 minutes. Past the window the server ignores the edit ' +
+            'without returning an error.',
           operationId: 'editMessage',
           requestBody: {
             required: true,
@@ -595,7 +634,10 @@ export function buildOpenApi(version: string): Record<string, unknown> {
                   required: ['session', 'messageId', 'text'],
                   properties: {
                     session: sessionName,
-                    messageId: { type: 'string' },
+                    messageId: {
+                      type: 'string',
+                      description: 'Serialized id, or a raw id together with `chatId`.',
+                    },
                     chatId: { type: 'string' },
                     text: { type: 'string', minLength: 1 },
                   },
@@ -604,18 +646,19 @@ export function buildOpenApi(version: string): Record<string, unknown> {
             },
           },
           responses: {
-            200: { description: 'Editada.' },
-            400: erro('Texto vazio (para remover use /api/deleteMessage) ou id inválido.'),
+            200: { description: 'Edited.' },
+            400: erro('Empty text (use /api/deleteMessage to remove) or invalid id.'),
           },
         },
       },
       '/api/deleteMessage': {
         post: {
-          tags: ['Mensagens'],
-          summary: 'Apaga para todos (revoke)',
+          tags: ['Messages'],
+          summary: 'Delete for everyone (revoke)',
           description:
-            'Também tem prazo, e o WhatsApp NÃO sinaliza quando expira — por isso a ' +
-            'resposta diz que a mensagem *pode* permanecer no aparelho do contato.',
+            'This also has a time window, and WhatsApp does NOT signal when it has expired — ' +
+            'which is why the response says the message *may* remain on the contact\'s device ' +
+            'instead of claiming success.',
           operationId: 'deleteMessage',
           requestBody: {
             required: true,
@@ -633,17 +676,17 @@ export function buildOpenApi(version: string): Record<string, unknown> {
               },
             },
           },
-          responses: { 200: { description: 'Comando aceito.' }, 400: erro('Id inválido.') },
+          responses: { 200: { description: 'Command accepted.' }, 400: erro('Invalid id.') },
         },
       },
       '/api/forwardMessage': {
         post: {
-          tags: ['Mensagens'],
-          summary: 'Encaminha para outro chat',
+          tags: ['Messages'],
+          summary: 'Forward to another chat',
           description:
-            'Precisa do CONTEÚDO. Passe `message` (funciona para qualquer mensagem, ' +
-            'inclusive recebida) ou `messageId` de mensagem que este gateway enviou e ' +
-            'ainda está na janela de retenção.',
+            'Forwarding needs the message CONTENT, not just its id. Either pass `message` ' +
+            '(works for any message, including ones you received) or a `messageId` of a ' +
+            'message this gateway sent and still holds within its retention window.',
           operationId: 'forwardMessage',
           requestBody: {
             required: true,
@@ -656,8 +699,12 @@ export function buildOpenApi(version: string): Record<string, unknown> {
                     session: sessionName,
                     to: chatId,
                     messageId: { type: 'string' },
-                    message: { type: 'object', description: 'Conteúdo cru da mensagem.' },
-                    force: { type: 'boolean', default: true, description: 'Marca "encaminhada".' },
+                    message: { type: 'object', description: 'Raw message content.' },
+                    force: {
+                      type: 'boolean',
+                      default: true,
+                      description: 'Show the "forwarded" label.',
+                    },
                   },
                 },
               },
@@ -665,16 +712,18 @@ export function buildOpenApi(version: string): Record<string, unknown> {
           },
           responses: {
             200: enviado,
-            400: erro('Destino ou conteúdo ausente.'),
-            404: erro('Conteúdo não encontrado — passe `message`.'),
+            400: erro('Missing destination or content.'),
+            404: erro('Content not found — pass `message` instead.'),
           },
         },
       },
       '/api/resendMessage': {
         post: {
-          tags: ['Mensagens'],
-          summary: 'Reenvia no mesmo chat',
-          description: 'Para o caso de falha de entrega (ack -1). Gera uma mensagem nova.',
+          tags: ['Messages'],
+          summary: 'Resend in the same chat',
+          description:
+            'For delivery failures (ack -1). Creates a new message with a new id — WhatsApp ' +
+            'has no retry for an already-emitted message.',
           operationId: 'resendMessage',
           requestBody: {
             required: true,
@@ -686,25 +735,26 @@ export function buildOpenApi(version: string): Record<string, unknown> {
                   properties: {
                     session: sessionName,
                     messageId: { type: 'string' },
-                    to: { type: 'string', description: 'Outro destino (padrão: o original).' },
+                    to: { type: 'string', description: 'Another chat (defaults to the original).' },
                   },
                 },
               },
             },
           },
-          responses: { 200: enviado, 404: erro('Conteúdo não guardado.') },
+          responses: { 200: enviado, 404: erro('Content not stored.') },
         },
       },
 
       // ── Presença ─────────────────────────────────────────────────────────
       '/api/typing': {
         post: {
-          tags: ['Presença'],
-          summary: '"digitando…" / "gravando…"',
+          tags: ['Presence'],
+          summary: 'Typing / recording indicator',
           description:
-            'O WhatsApp expira o indicador em ~10s. Com `duration`, o gateway renova ' +
-            'sozinho em background e a requisição responde na hora.',
-          operationId: 'typing',
+            'WhatsApp expires the indicator after about 10 seconds. With `duration` the ' +
+            'gateway refreshes it in the background and the request returns immediately — ' +
+            'useful while your bot composes a long answer.',
+          operationId: 'setTyping',
           requestBody: {
             required: true,
             content: {
@@ -715,26 +765,39 @@ export function buildOpenApi(version: string): Record<string, unknown> {
                   properties: {
                     session: sessionName,
                     chatId,
-                    typing: { type: 'boolean', default: true, description: 'false encerra.' },
-                    kind: { type: 'string', enum: ['composing', 'recording'] },
-                    duration: { type: 'integer', maximum: 60000, description: 'ms.' },
+                    typing: {
+                      type: 'boolean',
+                      default: true,
+                      description: '`false` clears the indicator.',
+                    },
+                    kind: {
+                      type: 'string',
+                      enum: ['composing', 'recording'],
+                      description: '`composing` for text, `recording` for audio.',
+                    },
+                    duration: {
+                      type: 'integer',
+                      maximum: 60000,
+                      description: 'Keep it alive for N milliseconds (max 60s).',
+                    },
                   },
                 },
               },
             },
           },
-          responses: { 200: { description: 'Aplicado.' }, 422: naoConectada },
+          responses: { 200: { description: 'Applied.' }, 422: naoConectada },
         },
       },
       '/api/presence': {
         post: {
-          tags: ['Presença'],
-          summary: 'Online/offline (conta) ou estado por conversa',
+          tags: ['Presence'],
+          summary: 'Online/offline (account) or per-chat state',
           description:
-            '`available`/`unavailable` valem para a conta inteira. Os outros três ' +
-            'exigem `chatId`. Manter `unavailable` deixa o WhatsApp continuar ' +
-            'notificando o celular do operador.',
-          operationId: 'presence',
+            '`available` and `unavailable` apply to the whole account. The other three are ' +
+            'per-conversation and require `chatId`.\n\n' +
+            'Staying `unavailable` lets WhatsApp keep notifying the operator\'s phone — ' +
+            'going online steals those notifications.',
+          operationId: 'setPresence',
           requestBody: {
             required: true,
             content: {
@@ -755,15 +818,15 @@ export function buildOpenApi(version: string): Record<string, unknown> {
             },
           },
           responses: {
-            200: { description: 'Aplicado.' },
-            400: erro('Estado inválido, ou de conversa sem chatId.'),
+            200: { description: 'Applied.' },
+            400: erro('Invalid state, or a per-chat state without chatId.'),
           },
         },
       },
       '/api/markAsRead': {
         post: {
-          tags: ['Presença'],
-          summary: 'Marca como lida (tiques azuis)',
+          tags: ['Presence'],
+          summary: 'Mark as read (blue ticks)',
           operationId: 'markAsRead',
           requestBody: {
             required: true,
@@ -775,14 +838,22 @@ export function buildOpenApi(version: string): Record<string, unknown> {
                   properties: {
                     session: sessionName,
                     chatId,
-                    messageIds: { type: 'array', maxItems: 500, items: { type: 'string' } },
-                    messageId: { type: 'string' },
+                    messageIds: {
+                      type: 'array',
+                      maxItems: 500,
+                      description: 'Several ids in one call.',
+                      items: { type: 'string' },
+                    },
+                    messageId: { type: 'string', description: 'Single id (alternative).' },
                   },
                 },
               },
             },
           },
-          responses: { 200: { description: 'Marcadas.' }, 400: erro('Lista vazia ou acima de 500.') },
+          responses: {
+            200: { description: 'Marked.' },
+            400: erro('Empty list, or more than 500 ids.'),
+          },
         },
       },
       '/api/presence/{chatId}': {
@@ -791,46 +862,58 @@ export function buildOpenApi(version: string): Record<string, unknown> {
           { name: 'session', in: 'query', required: true, schema: sessionName },
         ],
         get: {
-          tags: ['Presença'],
-          summary: 'Visto por último do contato',
+          tags: ['Presence'],
+          summary: 'Contact\'s last seen / online state',
           description:
-            'Depende da privacidade do contato: se ele restringe, o WhatsApp não envia ' +
-            'o dado (e é recíproco). Nesse caso vem `available: false` com a explicação, ' +
-            'em vez de um vazio ambíguo. Também assina para os próximos eventos.',
-          operationId: 'obterPresenca',
-          responses: { 200: { description: 'Estado conhecido, ou explicação.' } },
+            'Depends on the contact\'s privacy settings: if they restrict last-seen, WhatsApp ' +
+            'simply does not send it (and it is reciprocal — hiding yours also hides theirs ' +
+            'from you). In that case you get `available: false` with an explanation, rather ' +
+            'than an ambiguous empty response.\n\n' +
+            'This call also subscribes to the contact, so subsequent updates arrive as ' +
+            '`presence.update` webhook events.',
+          operationId: 'getPresence',
+          responses: { 200: { description: 'Known state, or an explanation.' } },
         },
       },
 
       // ── Contatos ─────────────────────────────────────────────────────────
       '/api/contacts/check-exists': {
         parameters: [
-          { name: 'phone', in: 'query', required: true, schema: { type: 'string' } },
+          {
+            name: 'phone',
+            in: 'query',
+            required: true,
+            schema: { type: 'string', examples: ['5511999999999'] },
+          },
           { name: 'session', in: 'query', required: true, schema: sessionName },
         ],
         get: {
-          tags: ['Contatos'],
-          summary: 'O número tem WhatsApp?',
+          tags: ['Contacts'],
+          summary: 'Does this number have WhatsApp?',
           description:
-            'Confira ANTES de enviar para número novo: sem isso, um número errado gera ' +
-            'um envio que o WhatsApp aceita e nunca entrega.',
-          operationId: 'checkExists',
+            'Check this BEFORE sending to a new number. Without it, a wrong number produces ' +
+            'a send that WhatsApp accepts and never delivers — and you would blame the ' +
+            'channel instead of the number.',
+          operationId: 'checkNumberExists',
           responses: {
             200: {
-              description: 'Resultado.',
+              description: 'Result.',
               content: {
                 'application/json': {
                   schema: {
                     type: 'object',
                     properties: {
                       numberExists: { type: 'boolean' },
-                      chatId: { type: 'string' },
+                      chatId: {
+                        type: 'string',
+                        description: 'Use this as the send destination.',
+                      },
                     },
                   },
                 },
               },
             },
-            400: erro('phone ou session ausente.'),
+            400: erro('Missing phone or session.'),
             422: naoConectada,
           },
         },
@@ -841,10 +924,10 @@ export function buildOpenApi(version: string): Record<string, unknown> {
           { name: 'session', in: 'query', required: true, schema: sessionName },
         ],
         get: {
-          tags: ['Contatos'],
-          summary: 'Dados do contato (nome, id)',
-          operationId: 'obterContato',
-          responses: { 200: { description: 'Contato.' }, 400: erro('Parâmetro ausente.') },
+          tags: ['Contacts'],
+          summary: 'Contact details (name, id)',
+          operationId: 'getContact',
+          responses: { 200: { description: 'The contact.' }, 400: erro('Missing parameter.') },
         },
       },
       '/api/contacts/profile-picture': {
@@ -853,10 +936,10 @@ export function buildOpenApi(version: string): Record<string, unknown> {
           { name: 'session', in: 'query', required: true, schema: sessionName },
         ],
         get: {
-          tags: ['Contatos'],
-          summary: 'Foto de perfil',
-          operationId: 'obterFoto',
-          responses: { 200: { description: 'URL da foto, ou null.' } },
+          tags: ['Contacts'],
+          summary: 'Profile picture',
+          operationId: 'getProfilePicture',
+          responses: { 200: { description: 'Picture URL, or null.' } },
         },
       },
       '/api/{session}/lids/{lid}': {
@@ -865,91 +948,106 @@ export function buildOpenApi(version: string): Record<string, unknown> {
           { name: 'lid', in: 'path', required: true, schema: { type: 'string' } },
         ],
         get: {
-          tags: ['Contatos'],
-          summary: 'Resolve id oculto (@lid) para telefone',
+          tags: ['Contacts'],
+          summary: 'Resolve a hidden id (@lid) to a phone number',
           description:
-            'O WhatsApp endereça contatos por um id oculto (LID) que NÃO é o telefone. ' +
-            'Se ele vazar como número, o contato nasce inválido e sem nome.',
-          operationId: 'resolverLid',
-          responses: { 200: { description: 'Telefone.' }, 404: erro('LID desconhecido.') },
+            'WhatsApp increasingly addresses contacts by a hidden id (LID) that is NOT the ' +
+            'phone number. If it leaks into your system as a number, the contact is created ' +
+            'with an invalid 14-15 digit "phone", no name, and every reply opens a new ' +
+            'conversation. Resolve it here.',
+          operationId: 'resolveLid',
+          responses: { 200: { description: 'Phone number.' }, 404: erro('Unknown LID.') },
         },
       },
 
       // ── Operação ─────────────────────────────────────────────────────────
       '/health': {
         get: {
-          tags: ['Operação'],
-          summary: 'Saúde (público)',
-          description: 'Valida o banco, não só o processo. Traz versão e commit.',
+          tags: ['Operations'],
+          summary: 'Health check (public)',
+          description:
+            'Validates the database, not just the process — a gateway that lost Postgres ' +
+            'cannot restore sessions. Also returns version and build commit.',
           operationId: 'health',
           security: [],
-          responses: { 200: { description: 'Saudável.' } },
+          responses: { 200: { description: 'Healthy.' } },
         },
       },
       '/metrics': {
         get: {
-          tags: ['Operação'],
-          summary: 'Métricas Prometheus',
+          tags: ['Operations'],
+          summary: 'Prometheus metrics',
           description:
-            'Quatro sinais que importam: `elo_inbound_undecryptable_total` (perdendo ' +
-            'mensagem), `elo_webhook_lost_total` (evento não chegou ao consumidor), ' +
-            '`elo_ack_failed_total` (saiu e não entregou) e `elo_session_up` (caiu). ' +
-            'Exige a chave: nome de sessão costuma identificar cliente.',
+            'Four signals worth alerting on:\n\n' +
+            '- `elo_inbound_undecryptable_total` > 0 — losing messages right now\n' +
+            '- `elo_webhook_lost_total` > 0 — an event never reached your system\n' +
+            '- `elo_ack_failed_total` > 0 — a message left and was not delivered\n' +
+            '- `elo_session_up` == 0 — session is down\n\n' +
+            'Requires the API key: session names usually identify customers.',
           operationId: 'metrics',
-          responses: { 200: { description: 'Exposição em texto.' } },
+          responses: { 200: { description: 'Text exposition format.' } },
         },
       },
       '/api/stats': {
         get: {
-          tags: ['Operação'],
-          summary: 'Contadores por sessão (JSON)',
-          description: 'O mesmo das métricas, em JSON — para quem não usa Prometheus.',
+          tags: ['Operations'],
+          summary: 'Per-session counters (JSON)',
+          description: 'The same numbers as /metrics, in JSON — for setups without Prometheus.',
           operationId: 'stats',
-          responses: { 200: { description: 'Contadores.' } },
+          responses: { 200: { description: 'Counters.' } },
         },
       },
       '/api/events': {
-        parameters: [{ name: 'after', in: 'query', schema: { type: 'integer' } }],
+        parameters: [
+          {
+            name: 'after',
+            in: 'query',
+            schema: { type: 'integer' },
+            description: 'Resume from this sequence number.',
+          },
+        ],
         get: {
-          tags: ['Operação'],
-          summary: 'Diagnóstico ao vivo (SSE)',
+          tags: ['Operations'],
+          summary: 'Live diagnostics (Server-Sent Events)',
           description:
-            'Stream de eventos: mensagem entrando, ACK progredindo, LID resolvido, ' +
-            'webhook rejeitado. É o que o painel consome.',
+            'Stream of what is happening: messages arriving, ACKs progressing, hidden ids ' +
+            'resolved, webhooks rejected. This is what the web panel consumes.',
           operationId: 'events',
           responses: { 200: { description: 'text/event-stream.' } },
         },
       },
       '/api/backup': {
         get: {
-          tags: ['Operação'],
-          summary: 'Baixa o pareamento',
+          tags: ['Operations'],
+          summary: 'Download the pairing backup',
           description:
-            '**Contém as chaves do WhatsApp**: quem tiver o arquivo consegue se passar ' +
-            'pelo número conectado. Guarde como guarda senha.',
-          operationId: 'backup',
-          responses: { 200: { description: 'Arquivo JSON.' } },
+            'The Postgres volume IS the pairing: losing it means scanning the QR code again ' +
+            'on every session. This endpoint exports what cannot be recreated.\n\n' +
+            '**The file contains WhatsApp keys.** Anyone holding it can impersonate the ' +
+            'connected number — read and send messages. Store it like a password.',
+          operationId: 'downloadBackup',
+          responses: { 200: { description: 'JSON file.' } },
         },
       },
       '/api/backup/status': {
         get: {
-          tags: ['Operação'],
-          summary: 'Há backup? Está em dia?',
+          tags: ['Operations'],
+          summary: 'Is there a backup? Is it current?',
           description:
-            '`risk`: `none` (nada a perder), `no_backup`, `stale` (pareamento mudou ' +
-            'depois do último backup) ou `ok`.',
+            '`risk`: `none` (nothing to lose yet), `no_backup`, `stale` (the pairing changed ' +
+            'after the last backup) or `ok`. Suitable for external monitoring.',
           operationId: 'backupStatus',
-          responses: { 200: { description: 'Risco calculado.' } },
+          responses: { 200: { description: 'Computed risk.' } },
         },
       },
       '/api/backup/restore': {
         post: {
-          tags: ['Operação'],
-          summary: 'Restaura um backup',
+          tags: ['Operations'],
+          summary: 'Restore a backup',
           description:
-            'DESTRUTIVO: substitui o pareamento atual e reinicia as sessões. Exige ' +
-            '`confirm: true` junto do dump.',
-          operationId: 'backupRestore',
+            'DESTRUCTIVE: replaces the current pairing and restarts the sessions. Requires ' +
+            '`confirm: true` alongside the dump.',
+          operationId: 'restoreBackup',
           requestBody: {
             required: true,
             content: {
@@ -967,8 +1065,8 @@ export function buildOpenApi(version: string): Record<string, unknown> {
             },
           },
           responses: {
-            200: { description: 'Restaurado.' },
-            400: erro('Sem confirm, ou formato desconhecido.'),
+            200: { description: 'Restored.' },
+            400: erro('Missing confirm, or unknown format.'),
           },
         },
       },
