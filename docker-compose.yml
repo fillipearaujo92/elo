@@ -14,7 +14,10 @@ services:
     # Imagem publicada: sobe em segundos, sem precisar compilar nem ter as
     # ferramentas de build. Multi-arch (amd64 e arm64, cobre Raspberry Pi e Mac
     # com Apple Silicon).
-    image: ghcr.io/fillipearaujo92/elo:latest
+    # ELO_TAG permite fixar a versão: `ELO_TAG=0.1.0 docker compose up -d`.
+    # Fixar a versão é o recomendado em produção — `latest` muda sob os seus pés
+    # no próximo release.
+    image: ghcr.io/fillipearaujo92/elo:${ELO_TAG:-latest}
     # Para compilar a partir deste diretório (desenvolvimento, ou fork com
     # modificações), comente a linha acima e descomente:
     # build: .
