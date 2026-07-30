@@ -108,3 +108,28 @@ CREATE TABLE IF NOT EXISTS wa_gateway.lid_map (
 
 CREATE INDEX IF NOT EXISTS lid_map_phone_idx
   ON wa_gateway.lid_map (session_name, phone);
+
+-- ── Marcos operacionais (chave/valor) ──────────────────────────────────────
+--
+-- Existe para responder UMA pergunta que nenhum outro dado responde: "este
+-- pareamento já foi para algum backup?"
+--
+-- O volume do Postgres É o pareamento: perdê-lo obriga a escanear o QR de todas
+-- as sessões novamente. O usuário sabe disso — está no README —, mas é o tipo de
+-- aviso que se lê depois de perder. Com estes dois marcos o painel consegue
+-- avisar ANTES.
+--
+-- Detectar "volume novo" sozinho não serviria: toda instalação nova é um volume
+-- novo, e o aviso viraria ruído ignorado. O sinal útil é a COMBINAÇÃO
+-- "existe pareamento" + "nunca houve backup".
+CREATE TABLE IF NOT EXISTS wa_gateway.marks (
+  key        TEXT PRIMARY KEY,
+  at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  detail     TEXT
+);
+
+-- `db_created`: quando este BANCO nasceu. Um valor recente com sessões antigas é
+-- sinal de volume recriado (restauração, ou troca acidental).
+INSERT INTO wa_gateway.marks (key, detail)
+VALUES ('db_created', 'primeiro boot deste banco')
+ON CONFLICT (key) DO NOTHING;

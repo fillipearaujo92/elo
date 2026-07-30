@@ -17,6 +17,7 @@ import { registerSendRoutes } from './routes/send.js';
 import { registerPresenceRoutes } from './routes/presence.js';
 import { registerSessionRoutes } from './routes/sessions.js';
 import { renderPrometheus } from './core/metrics.js';
+import { backupStatus, dumpAuth, restoreAuth, setMark } from './core/backup.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -165,6 +166,60 @@ registerSessionRoutes(app, { sessions });
 registerSendRoutes(app, { sessions });
 registerContactRoutes(app, { sessions });
 registerPresenceRoutes(app, { sessions });
+
+// ── Backup do pareamento ───────────────────────────────────────────────────
+// O volume do Postgres É o pareamento: perdê-lo obriga a escanear o QR de todas
+// as sessões de novo. O README avisa, mas aviso em doc é lido DEPOIS de perder —
+// então o gateway oferece o dump em um clique e diz no painel quando há
+// pareamento sem backup.
+
+// GET /api/backup/status — risco calculado, consumido pelo painel.
+app.get('/api/backup/status', async () => backupStatus(pool));
+
+// GET /api/backup — baixa o dump (JSON).
+//
+// ★ O arquivo contém as CHAVES DO SIGNAL: quem o tem consegue se passar pelo
+// número conectado. Exige a API key (como todo o resto), e o próprio arquivo
+// carrega o aviso — para não virar anexo esquecido num e-mail.
+app.get('/api/backup', async (_req, reply) => {
+  const dump = await dumpAuth(pool);
+  await setMark(pool, 'last_backup', 'download via /api/backup');
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+  return reply
+    .header('Content-Disposition', `attachment; filename="elo-backup-${stamp}.json"`)
+    .type('application/json; charset=utf-8')
+    .send(JSON.stringify(dump, null, 2));
+});
+
+// POST /api/backup/restore — restaura um dump.
+//
+// DESTRUTIVO: substitui o pareamento atual. Exige `confirm: true` no corpo para
+// não haver restauração acidental — o custo de errar aqui é derrubar as sessões
+// que estão funcionando.
+app.post<{ Body: { confirm?: boolean; format?: number; data?: Record<string, unknown[]> } }>(
+  '/api/backup/restore',
+  async (req, reply) => {
+    if (req.body?.confirm !== true) {
+      return reply.code(400).send({
+        message:
+          'restauracao SUBSTITUI o pareamento atual; envie "confirm": true junto do dump ' +
+          'para confirmar',
+      });
+    }
+    // Para as sessões antes de trocar o estado sob elas: um socket vivo com o
+    // auth state de outro pareamento gera erro de decifração em cascata.
+    await sessions.shutdown();
+    try {
+      const out = await restoreAuth(pool, req.body);
+      await setMark(pool, 'last_restore', 'via /api/backup/restore');
+      // Sobe de novo com o estado restaurado.
+      await sessions.restoreAll();
+      return { success: true, ...out, note: 'sessoes reiniciadas com o pareamento restaurado' };
+    } catch (err) {
+      return reply.code(400).send({ message: (err as Error).message });
+    }
+  },
+);
 
 // GET /metrics — formato Prometheus.
 //

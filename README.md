@@ -246,6 +246,9 @@ Eventos: `message` (recebida), `message.ack` (confirmação de entrega/leitura),
 | `POST` | `/api/presence` | online/offline, por chat ou global |
 | `POST` | `/api/markAsRead` | marca como lida |
 | `GET` | `/api/presence/{chatId}` | visto por último do contato |
+| `GET` | `/api/backup` | baixa o pareamento |
+| `GET` | `/api/backup/status` | há backup? está em dia? |
+| `POST` | `/api/backup/restore` | restaura (destrutivo) |
 | `GET` | `/metrics` | métricas Prometheus |
 | `GET` | `/health` | saúde (valida o banco), versão e commit |
 
@@ -330,7 +333,7 @@ costuma identificar cliente.
 ```bash
 npm ci
 npm run dev          # watch
-npm test             # 246 testes
+npm test             # 263 testes
 npm run typecheck
 ```
 

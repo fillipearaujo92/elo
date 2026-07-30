@@ -331,6 +331,21 @@ a{color:inherit;text-decoration:none}
 @keyframes sp{to{transform:rotate(360deg)}}
 .spn.c{display:block;margin:60px auto}
 
+/* Faixa de aviso: o pareamento existe e nunca foi para um backup. Discreta —
+   informa e oferece a ação, sem bloquear o painel nem virar modal. */
+.wr{display:flex;align-items:center;gap:14px;border:1px solid var(--amb);
+  background:color-mix(in srgb, var(--amb) 9%, transparent);
+  padding:11px 14px;margin-bottom:16px;font-size:11.5px;color:var(--t1)}
+.wr b{color:var(--amb);font-weight:600;letter-spacing:.04em;text-transform:uppercase;
+  font-size:10px;white-space:nowrap}
+.wr span{flex:1;min-width:0;line-height:1.5;color:var(--t2)}
+.wr button{font-size:10.5px;padding:6px 12px;background:none;color:var(--amb);
+  border:1px solid var(--amb);cursor:pointer;font-family:inherit;white-space:nowrap;
+  letter-spacing:.08em;text-transform:uppercase}
+.wr button:hover{background:color-mix(in srgb, var(--amb) 16%, transparent)}
+.wr .x{border:none;color:var(--t4);padding:4px 6px;font-size:13px}
+.wr .x:hover{background:none;color:var(--t2)}
+
 /* ── Entrada de chave ──────────────────────────────────────────────────────
    A versão anterior era um bloco de 330px alinhado à esquerda, solto no meio da
    tela, com uma LINHA DIVISÓRIA ÓRFÃ: o border-top do .lg-b caía depois da área
@@ -415,6 +430,11 @@ a{color:inherit;text-decoration:none}
 <script>
 let KEY=sessionStorage.getItem('zapkey')||''
 let sess=[], stats={}, evs=[], view='sessions'
+// Estado do backup do pareamento. Vem do /api/backup/status.
+let bkp=null
+// Dispensar é por SESSÃO do navegador, não permanente: o risco continua real, e
+// silenciar para sempre transformaria o aviso em nada.
+let bkpOff=sessionStorage.getItem('elo-bkp-off')==='1'
 // Versão do gateway. Vem do /health — endpoint PÚBLICO, então pode ser lida
 // antes do login (aparece já na tela da chave).
 const VER={v:null,c:null}
@@ -601,6 +621,7 @@ function vSess(){
   const sg=(k,lbl,cls)=>`<div class="sg${filt===k?' on':''}" data-f="${k}">
     <div class="sg-v ${cls}">${c[k]||0}</div><div class="sg-l">${lbl}</div></div>`
   $('bd').innerHTML=`
+   ${avisoBackup()}
    <div class="sig">
      ${sg('WORKING','no ar','a')}${sg('SCAN_QR_CODE','aguardando qr','w')}
      ${sg('FAILED','com falha','e')}${sg('STOPPED','paradas','z')}
@@ -610,6 +631,12 @@ function vSess(){
   document.querySelectorAll('.sg[data-f]').forEach(b=>b.onclick=()=>{
     filt=filt===b.dataset.f?null:b.dataset.f; vSess()
   })
+  if($('bkd'))$('bkd').onclick=baixarBackup
+  if($('bkx'))$('bkx').onclick=()=>{
+    // Dispensa só nesta sessão do navegador: o risco continua real, e silenciar
+    // para sempre transformaria o aviso em decoração.
+    bkpOff=true; sessionStorage.setItem('elo-bkp-off','1'); vSess()
+  }
   rows()
 }
 
@@ -764,11 +791,64 @@ async function load(manual){
   if(loading)return; loading=true
   if(manual&&$('rf'))$('rf').innerHTML='<span class="spn"></span>'
   try{
-    const [s,k]=await Promise.all([api('/api/sessions'),api('/api/stats').catch(()=>({}))])
+    const [s,k]=await Promise.all([
+      api('/api/sessions'),
+      api('/api/stats').catch(()=>({})),
+      carregarBackup(),
+    ])
     sess=s; stats=k
     if(view==='sessions')vSess(); else lg()
   }catch(e){toast('er','falha',e.message)}
   finally{loading=false; if(manual&&$('rf'))$('rf').innerHTML='atualizar'}
+}
+
+/**
+ * Faixa de aviso do backup.
+ *
+ * Só aparece quando há risco REAL: pareamento existente sem backup, ou backup
+ * mais antigo que a última mudança de pareamento. Numa instalação nova (sem
+ * sessão pareada) não há nada a perder — e mostrar aviso aí treinaria o operador
+ * a ignorá-lo.
+ */
+function avisoBackup(){
+  if(bkpOff||!bkp)return ''
+  if(bkp.risk!=='no_backup'&&bkp.risk!=='stale')return ''
+  const titulo=bkp.risk==='no_backup'?'sem backup':'backup desatualizado'
+  return `<div class="wr">
+    <b>${titulo}</b>
+    <span>${esc(bkp.message)}</span>
+    <button id="bkd">baixar backup</button>
+    <button class="x" id="bkx" title="dispensar até recarregar">×</button>
+  </div>`
+}
+
+/** Baixa o dump. O navegador salva o arquivo; o servidor registra o marco. */
+async function baixarBackup(){
+  const b=$('bkd')
+  if(b){b.disabled=true;b.innerHTML='<span class="spn"></span>'}
+  try{
+    // fetch (não link direto) porque a rota exige o header X-Api-Key.
+    const r=await fetch('/api/backup',{headers:{'X-Api-Key':KEY}})
+    if(!r.ok)throw new Error(`HTTP ${r.status}`)
+    const blob=await r.blob()
+    const nome=(r.headers.get('Content-Disposition')||'').match(/filename="([^"]+)"/)?.[1]
+      ||'elo-backup.json'
+    const url=URL.createObjectURL(blob)
+    const a=document.createElement('a')
+    a.href=url; a.download=nome; a.click()
+    // Revoga depois do clique: revogar antes cancela o download em alguns navegadores.
+    setTimeout(()=>URL.revokeObjectURL(url),4000)
+    toast('ok','backup baixado','guarde como guarda senha: contém as chaves do WhatsApp')
+    await carregarBackup()
+    if(view==='sessions')vSess()
+  }catch(e){
+    toast('er','falha no backup',e.message)
+    if(b){b.disabled=false;b.innerHTML='baixar backup'}
+  }
+}
+
+async function carregarBackup(){
+  try{ bkp=await api('/api/backup/status') }catch{ bkp=null }
 }
 
 // ── Ações ──────────────────────────────────────────────────────────────────
