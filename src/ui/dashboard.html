@@ -25,6 +25,12 @@
   --sig:#4ADE80; --sig-dim:rgba(74,222,128,.11);
   --amb:#D4A24C; --red:#D9605A;
   --mono:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;
+  /* ★ Curva das animações. Estava FALTANDO: três regras já chamavam var(--ease)
+     — a entrada da tela de login (lg-in), a transição do switch e o pulso da
+     marca — e um var() sem valor invalida a declaração INTEIRA. Resultado: as
+     animações simplesmente não existiam (getAnimations() devolvia lista vazia),
+     silenciosamente, sem erro no console. Medido no Chrome. */
+  --ease:cubic-bezier(.4,0,.2,1);
 }
 :root[data-theme="light"]{
   --ink:#FAFAF9; --ink-2:#F1F1EF; --ink-3:#E7E7E4;
@@ -404,6 +410,56 @@ a{color:inherit;text-decoration:none}
    serrilhado (viewBox 32 exibido a 42px = escala 1,3125, com cx/r/stroke todos
    caindo em fracao de pixel). */
 .mk-lg,.mk{flex-shrink:0}
+/* ── Pulso da marca ────────────────────────────────────────────────────────
+   Os dois elos respiram em CONTRAPONTO (o segundo atrasado meio ciclo): a marca
+   é um handshake, e é isso que o gateway faz — um lado chama, o outro responde.
+
+   Anima só `opacity` e `filter`, NUNCA transform/escala: o aviso acima vale
+   igual em movimento. Escalar joga cx/r/stroke em subpixel e a logo serrilha
+   quadro a quadro — seria o serrilhado de volta, agora animado.
+
+   `will-change:opacity` mantém a camada promovida na GPU; sem isso o Chrome
+   repromove a cada ciclo e o traço tremula. Duração longa (2,6s) e amplitude
+   curta: é sinal de vida, não chamariz — a tela de entrada fica aberta enquanto
+   se digita a chave, e um pulso agressivo cansa em segundos. */
+.mk-lg .e1,.mk-lg .e2,.mk .e1,.mk .e2{
+  animation:mk-pulso 2.6s var(--ease) infinite;will-change:opacity}
+/* O elo 2 nasce a .45 (mais apagado) e vai ao CONTRÁRIO do elo 1: quando um
+   recolhe, o outro acende.
+   ★ A inversão está no KEYFRAME, não num animation-delay. Tentei primeiro com
+   `delay:-1.3s` (meio ciclo de 2.6s) e medi no Chrome: os dois escureciam
+   JUNTOS. Como os keyframes são simétricos (0% igual a 100%), deslocar meio
+   ciclo devolve a mesma curva — o delay muda a fase, não a direção. Invertendo
+   os valores do keyframe o contraponto é real em qualquer instante. */
+.mk-lg .e2,.mk .e2{animation-name:mk-pulso-2}
+@keyframes mk-pulso{
+  0%,100%{opacity:1;filter:drop-shadow(0 0 0 transparent)}
+  50%    {opacity:.62;filter:drop-shadow(0 0 3px var(--sig-dim))}}
+@keyframes mk-pulso-2{
+  0%,100%{opacity:.45;filter:drop-shadow(0 0 0 transparent)}
+  50%    {opacity:.9;filter:drop-shadow(0 0 3px var(--sig-dim))}}
+
+/* ── O segundo elo é o SEMÁFORO ────────────────────────────────────────────
+   Um canal aguardando QR ou com falha não pode depender de o operador estar na
+   aba certa para ser visto. O segundo elo assume a cor do pior estado presente
+   (`--amb` aguardando QR, `--red` com falha) e passa a pulsar mais forte.
+
+   `stroke` explícito, não `currentColor`: o elo precisa divergir da marca — é a
+   divergência que carrega a informação. `--mk2` cai em currentColor quando não há
+   nada a sinalizar, então o estado normal continua sendo a marca intacta.
+
+   Só o elo 2 muda de cor. Pintar os dois transformaria a marca num alarme e
+   custaria a identidade; com um elo verde e outro âmbar, a leitura é
+   "algo aqui pede atenção", não "o produto está quebrado". */
+.mk-lg .e2,.mk .e2{stroke:var(--mk2,currentColor)}
+/* Aviso (QR/falha): mais contraste e ciclo mais curto — some no fundo se for
+   idêntico ao pulso de repouso. A amplitude sobe até 1, não além: opacidade não
+   passa de 1 e o keyframe tem de bater com o que o navegador consegue render. */
+.mk-lg.mk-alerta .e2,.mk.mk-alerta .e2{
+  animation-name:mk-pulso-alerta;animation-duration:1.5s}
+@keyframes mk-pulso-alerta{
+  0%,100%{opacity:.5;filter:drop-shadow(0 0 0 transparent)}
+  50%    {opacity:1;filter:drop-shadow(0 0 4px var(--mk2,currentColor))}}
 .lg-i{font-size:16px;color:var(--t1);letter-spacing:.34em;text-transform:uppercase;
   font-weight:500;
   /* letter-spacing empurra o texto para a direita; o padding compensa e o
@@ -517,6 +573,35 @@ const ST={
  STOPPED:{l:'parada',k:'z',c:'var(--t4)'},
 }
 const st=s=>ST[s]||ST.STOPPED
+
+/**
+ * Pinta o SEGUNDO elo da marca com a cor do pior estado presente.
+ *
+ * Falha ganha de "aguardando QR": um canal com falha não volta sozinho, e o QR
+ * expira e é regenerado — quem tem os dois precisa ver o vermelho, senão a falha
+ * fica escondida atrás de uma condição que se resolve no próximo ciclo.
+ *
+ * A cor sai do mapa ST, a mesma dos contadores e das linhas. Duplicá-la aqui
+ * criaria dois lugares para trocar quando o tema mudar — e um deles ficaria para
+ * trás. Os estados que não pedem ação (no ar, iniciando, parada) devolvem null e
+ * a marca volta ao verde inteira.
+ */
+function marcaAlerta(){
+  if(sess.some(s=>s.status==='FAILED'))       return ST.FAILED.c
+  if(sess.some(s=>s.status==='SCAN_QR_CODE')) return ST.SCAN_QR_CODE.c
+  return null
+}
+/** Aplica o estado nas DUAS marcas (cabeçalho e tela de entrada, quando visível). */
+function sinalizarMarca(){
+  const cor=marcaAlerta()
+  for(const el of document.querySelectorAll('.mk,.mk-lg')){
+    // A cor vai numa custom property em vez de `stroke` direto: assim o CSS
+    // decide como usá-la (traço E brilho do drop-shadow) sem o JS saber de
+    // apresentação.
+    if(cor){el.style.setProperty('--mk2',cor);el.classList.add('mk-alerta')}
+    else   {el.style.removeProperty('--mk2');el.classList.remove('mk-alerta')}
+  }
+}
 // Telefone legível com o país explícito, para nunca parecer que falta dígito.
 //   558586479003  -> +55 85 8647-9003   (12 dig: número antigo, sem o nono)
 //   5585986479003 -> +55 85 98647-9003  (13 dig: celular com o nono)
@@ -555,7 +640,7 @@ async function api(p,o={}){
 function login(err){
   document.body.style.overflow='auto'
   $('app').innerHTML=`<div class="lg"><div class="lg-c">
-   <svg class="mk-lg" width="44" height="32" viewBox="0 0 44 32" aria-hidden="true" shape-rendering="geometricPrecision"><g fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"><circle cx="15" cy="16" r="11"/><circle cx="29" cy="16" r="11" opacity=".45"/></g></svg>
+   <svg class="mk-lg" width="44" height="32" viewBox="0 0 44 32" aria-hidden="true" shape-rendering="geometricPrecision"><g fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"><circle class="e1" cx="15" cy="16" r="11"/><circle class="e2" cx="29" cy="16" r="11" opacity=".45"/></g></svg>
    <div class="lg-i">ELO</div>
    <div class="lg-s">gateway whatsapp</div>
    <div class="lg-v" id="lgv">${VER.v?esc(verLabel()):'&nbsp;'}</div>
@@ -615,7 +700,7 @@ function shell(){
   const errs=evs.filter(e=>e.level==='error').length
   $('app').innerHTML=`<div class="app">
    <div class="tb">
-     <div class="tb-id"><svg class="mk" width="22" height="16" viewBox="0 0 22 16" aria-hidden="true" shape-rendering="geometricPrecision"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="7.5" cy="8" r="5.5"/><circle cx="14.5" cy="8" r="5.5" opacity=".45"/></g></svg><span class="tb-idt"><span>ELO</span><span class="tb-v" id="tbv">${
+     <div class="tb-id"><svg class="mk" width="22" height="16" viewBox="0 0 22 16" aria-hidden="true" shape-rendering="geometricPrecision"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle class="e1" cx="7.5" cy="8" r="5.5"/><circle class="e2" cx="14.5" cy="8" r="5.5" opacity=".45"/></g></svg><span class="tb-idt"><span>ELO</span><span class="tb-v" id="tbv">${
        VER.v?esc(verLabel()):''}</span></span></div>
      <nav class="tb-nav">
        <button data-v="sessions" class="${view==='sessions'?'on':''}">sessões</button>
@@ -653,6 +738,10 @@ function shell(){
   if($('nw'))$('nw').onclick=newSess
   if($('cl'))$('cl').onclick=()=>{evs=[];shell()}
   if($('q'))$('q').oninput=e=>{q=e.target.value;rows()}
+  // O shell reescreve o innerHTML, então a marca volta ao normal — reaplica o
+  // sinal aqui. Sem isto o alerta desaparecia ao trocar de aba (1/2), mudar o
+  // tema ou limpar eventos, e só voltava na atualização seguinte.
+  sinalizarMarca()
   render()
 }
 function theme(){
@@ -851,6 +940,10 @@ async function load(manual){
       carregarBackup(),
     ])
     sess=s; stats=k
+    // A marca sinaliza aqui, NÃO dentro do vSess(): o vSess só roda na aba de
+    // sessões, e o operador que está na aba de eventos precisa ver o alerta
+    // igual. Este ponto é comum a toda atualização.
+    sinalizarMarca()
     if(view==='sessions')vSess(); else lg()
   }catch(e){toast('er','falha',e.message)}
   finally{
