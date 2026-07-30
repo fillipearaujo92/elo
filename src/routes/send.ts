@@ -10,6 +10,7 @@
 import { Boom } from '@hapi/boom';
 import type { AnyMessageContent } from 'baileys';
 import type { FastifyInstance } from 'fastify';
+import { inc } from '../core/metrics.js';
 import { serializeMsgId, toBaileysJid } from '../core/waha-compat.js';
 
 import type { SessionManager } from '../core/session-manager.js';
@@ -46,6 +47,16 @@ const MAX_FILE_BYTES = 64 * 1024 * 1024;
 const MAX_MEDIA_ITEMS = 30;
 
 /**
+ * Teto AGREGADO de bytes por chamada de /sendMedia (128MB).
+ *
+ * O teto por item (MAX_FILE_BYTES) não bastava: os arquivos são todos resolvidos
+ * ANTES do primeiro envio (para um item inválido não deixar metade entregue), então
+ * 30 itens de 64MB = ~1,9GB de heap num único request autenticado — o mesmo OOM que
+ * o comentário do MAX_FILE_BYTES diz ter sido corrigido, por outra porta.
+ */
+const MAX_MEDIA_TOTAL_BYTES = 128 * 1024 * 1024;
+
+/**
  * Lê o corpo da resposta contando bytes e abortando ao passar do teto.
  *
  * `content-length` pode faltar (chunked) ou mentir, então não dá para confiar só
@@ -57,15 +68,26 @@ async function readCapped(res: Response, max: number): Promise<Buffer> {
   if (!reader) return Buffer.alloc(0);
   const chunks: Buffer[] = [];
   let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > max) {
-      await reader.cancel().catch(() => {});
-      throw new Boom(`file.url passou de ${max / 1048576}MB`, { statusCode: 413 });
+  let completo = false;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        completo = true;
+        break;
+      }
+      total += value.byteLength;
+      if (total > max) {
+        throw new Boom(`file.url passou de ${max / 1048576}MB`, { statusCode: 413 });
+      }
+      chunks.push(Buffer.from(value));
     }
-    chunks.push(Buffer.from(value));
+  } finally {
+    // ★ `finally`: antes o cancel() só existia no caminho do 413. Se o read()
+    // rejeitasse no meio (ECONNRESET, ou o AbortSignal disparando), o corpo ficava
+    // sem drenar e o socket pendurado no pool do undici — vazamento a cada
+    // tentativa contra um servidor que derruba a conexão.
+    if (!completo) await reader.cancel().catch(() => {});
   }
   return Buffer.concat(chunks);
 }
@@ -201,14 +223,23 @@ export function registerSendRoutes(app: FastifyInstance, { sessions }: Deps): vo
   ): Promise<Record<string, unknown>> {
     const sock = sessions.requireSocket(session);
     const quoted = buildQuoted(replyTo, jid);
-    const sent = await sock.sendMessage(
-      jid,
-      content,
-      quoted ? ({ quoted } as never) : undefined,
-    );
+    // ★ Conta sucesso E falha. Os contadores existiam no enum mas NUNCA eram
+    // incrementados: um alerta como `rate(elo_outbound_error_total[5m]) > 0`
+    // jamais dispararia — não por ausência de falha, mas por ausência de série.
+    // Falha silenciosa reintroduzida no caminho de envio, justo o que o módulo
+    // de métricas existe para eliminar.
+    let sent;
+    try {
+      sent = await sock.sendMessage(jid, content, quoted ? ({ quoted } as never) : undefined);
+    } catch (err) {
+      inc('outbound_error_total', session);
+      throw err;
+    }
     if (!sent?.key?.id) {
+      inc('outbound_error_total', session);
       throw new Boom('envio nao retornou id de mensagem', { statusCode: 500 });
     }
+    inc('outbound_total', session);
 
     // ★ Guarda o conteúdo para responder RETRY RECEIPTS. Quando o celular do
     // destinatário não consegue decifrar (sessão Signal ruim), ele pede o reenvio;
@@ -354,9 +385,19 @@ export function registerSendRoutes(app: FastifyInstance, { sessions }: Deps): vo
     // Resolve TODOS os arquivos antes de enviar qualquer um: um base64 inválido
     // no item 4 não deve deixar 3 mensagens já entregues e o resto falhando.
     const resolvidos = [];
+    let bytes = 0;
     for (const [i, item] of items.entries()) {
       try {
-        resolvidos.push({ f: await resolveFile(item?.file), item });
+        const f = await resolveFile(item?.file);
+        bytes += f.buffer?.length ?? 0;
+        if (bytes > MAX_MEDIA_TOTAL_BYTES) {
+          throw new Boom(
+            `os arquivos somam mais de ${MAX_MEDIA_TOTAL_BYTES / 1048576}MB; ` +
+              'divida em mais de uma chamada',
+            { statusCode: 413 },
+          );
+        }
+        resolvidos.push({ f, item });
       } catch (err) {
         const msg = (err as Error).message;
         throw new Boom(`item ${i + 1}: ${msg}`, {
@@ -371,25 +412,40 @@ export function registerSendRoutes(app: FastifyInstance, { sessions }: Deps): vo
     // Só imagens e vídeos entram num álbum (regra do WhatsApp). O que não for
     // vai depois, como mensagem própria.
     let albumParentKey: unknown;
+    // ★ UM Set decide quem entra no álbum — o container e as mensagens leem a
+    // MESMA fonte.
+    //
+    // Antes havia dois filtros independentes (`naAlbum` para contar e `podeAlbum`
+    // para anexar) e eles DIVERGIAM: um `image/webp` COM caption era excluído da
+    // contagem (a regra excluía webp sempre) mas virava `{image}` e passava no
+    // anexo. Medido: container declarava 2 imagens e 3 mensagens iam com
+    // albumParentKey — álbum inconsistente no aparelho do contato.
+    const noAlbum = new Set<number>();
     if (opts.album) {
-      const naAlbum = resolvidos.filter((r) => {
-        const m = (r.f.mimetype ?? '').toLowerCase();
-        return (
-          !(r.item?.asDocument ?? opts.forceDocument) &&
-          !(r.item?.asVoice ?? opts.forceVoice) &&
-          (m.startsWith('image/') || m.startsWith('video/')) &&
-          m !== 'image/webp'
-        );
+      resolvidos.forEach((r, i) => {
+        if (r.item?.asDocument ?? opts.forceDocument) return;
+        if (r.item?.asVoice ?? opts.forceVoice) return;
+        // A pergunta certa é "o conteúdo montado é imagem ou vídeo?", não
+        // "o mimetype começa com image/" — é o que mantém os dois lados iguais.
+        const c = mediaContent(r.f, {
+          caption: r.item?.caption ?? (i === 0 ? opts.caption : undefined),
+        }) as Record<string, unknown>;
+        if ('image' in c || 'video' in c) noAlbum.add(i);
       });
+
       // Álbum de 1 item é uma bolha normal — não vale criar o container.
-      if (naAlbum.length >= 2) {
-        const imagens = naAlbum.filter((r) =>
-          (r.f.mimetype ?? '').toLowerCase().startsWith('image/'),
-        ).length;
+      if (noAlbum.size >= 2) {
+        let imagens = 0;
+        for (const i of noAlbum) {
+          const c = mediaContent(resolvidos[i]!.f, {
+            caption: resolvidos[i]!.item?.caption ?? (i === 0 ? opts.caption : undefined),
+          }) as Record<string, unknown>;
+          if ('image' in c) imagens += 1;
+        }
         const parent = await sock.sendMessage(jid, {
           album: {
             expectedImageCount: imagens,
-            expectedVideoCount: naAlbum.length - imagens,
+            expectedVideoCount: noAlbum.size - imagens,
           },
         } as never);
         albumParentKey = parent?.key;
@@ -424,6 +480,7 @@ export function registerSendRoutes(app: FastifyInstance, { sessions }: Deps): vo
       );
 
       if (!sent?.key?.id) {
+        inc('outbound_error_total', session);
         // Falha no meio: reportamos o que JÁ foi enviado. Sem isso o consumidor
         // reenviaria tudo e o contato receberia duplicado.
         throw new Boom(
@@ -431,6 +488,7 @@ export function registerSendRoutes(app: FastifyInstance, { sessions }: Deps): vo
           { statusCode: 500 },
         );
       }
+      inc('outbound_total', session);
       await sessions.rememberSentMessage(session, sent.key, sent.message);
       const id = serializeMsgId(sent.key);
       enviados.push({
@@ -586,15 +644,44 @@ export function registerSendRoutes(app: FastifyInstance, { sessions }: Deps): vo
     jidFallback: string,
   ): { remoteJid: string; id: string; fromMe: boolean } {
     if (!id) throw new Boom('messageId e obrigatorio', { statusCode: 400 });
-    const parts = String(id).split('_');
-    const serializado = parts.length >= 3;
-    const raw = serializado ? (parts[parts.length - 1] ?? '') : String(id);
-    if (!raw) throw new Boom('messageId invalido', { statusCode: 400 });
-    // O chat vem do id serializado quando possível; senão do chatId informado.
-    const chatDoId = serializado ? parts.slice(1, -1).join('_') : '';
-    const jid = chatId ? toBaileysJid(chatId) : chatDoId ? toBaileysJid(chatDoId) : jidFallback;
-    if (!jid) throw new Boom('chatId e obrigatorio (nao deu para inferir do messageId)', { statusCode: 400 });
-    return { remoteJid: jid, id: raw, fromMe: serializado ? parts[0] === 'true' : true };
+    const texto = String(id).trim();
+    if (!texto) throw new Boom('messageId invalido', { statusCode: 400 });
+
+    // ★ Reconhece o formato serializado por PADRÃO, não por contagem de partes.
+    //
+    // O split ingênuo por '_' era frágil de dois jeitos, medidos:
+    //   'true_5511999999999@c.us_ABC_123'  → raw="123" e chat="…@c.us_ABC"
+    //     (apagaria/editaria OUTRA mensagem, ou nenhuma — silenciosamente)
+    //   'true_ABC123'                      → 2 partes, tratado como id cru inteiro
+    // Nos 892 ids reais do banco nenhum tem underscore (são hexadecimais), então
+    // o risco prático é baixo — mas operar na mensagem errada é grave o bastante
+    // para não depender disso.
+    //
+    // Formato: <true|false>_<chat com @dominio>_<idCru>. O `@` no meio é o que
+    // torna o padrão reconhecível sem ambiguidade.
+    const m = /^(true|false)_(.+@[a-z.]+)_([^_]+)$/i.exec(texto);
+    if (m) {
+      const jid = chatId ? toBaileysJid(chatId) : toBaileysJid(m[2]!);
+      return { remoteJid: jid, id: m[3]!, fromMe: m[1]!.toLowerCase() === 'true' };
+    }
+
+    // Não casou: tratamos como id CRU. Aí o chatId é obrigatório — sem ele não há
+    // como saber em qual conversa a mensagem está.
+    if (texto.includes('_')) {
+      throw new Boom(
+        'messageId em formato desconhecido: use o id serializado ' +
+          '(<fromMe>_<chatId>_<id>) que o envio devolveu, ou o id cru junto com chatId',
+        { statusCode: 400 },
+      );
+    }
+    const jid = chatId ? toBaileysJid(chatId) : jidFallback;
+    if (!jid) {
+      throw new Boom('chatId e obrigatorio quando o messageId nao e o serializado', {
+        statusCode: 400,
+      });
+    }
+    // Id cru: assumimos mensagem própria (é o caso de apagar/editar o que enviamos).
+    return { remoteJid: jid, id: texto, fromMe: true };
   }
 
   // POST /api/deleteMessage — apaga para TODOS ("Apagar para todos" do WhatsApp).
@@ -814,20 +901,22 @@ export function registerSendRoutes(app: FastifyInstance, { sessions }: Deps): vo
       if (!session) return reply.code(400).send({ message: 'session e obrigatorio' });
       if (!messageId) return reply.code(400).send({ message: 'messageId e obrigatorio' });
 
-      // O chat pode vir explicito ou ser extraido do id serializado
-      // ("<fromMe>_<chatId>_<rawId>") — o backend manda o id serializado.
-      const parts = messageId.split('_');
-      const chatFromId = parts.length >= 3 ? parts.slice(1, -1).join('_') : null;
-      const chatIdRaw = req.body?.chatId?.trim() || chatFromId;
-      if (!chatIdRaw) {
-        return reply.code(400).send({
-          message: 'chatId e obrigatorio quando messageId nao e serializado',
-        });
+      // ★ Usa o MESMO keyFromId dos outros endpoints, em vez de repetir o split
+      // ingênuo por '_' — que produzia key errada com id contendo underscore
+      // (reagiria à mensagem errada). Uma implementação, um comportamento.
+      let alvoKey;
+      try {
+        alvoKey = keyFromId(messageId, req.body?.chatId, '');
+      } catch (err) {
+        const st = (err as { output?: { statusCode?: number } })?.output?.statusCode ?? 400;
+        return reply.code(st).send({ message: (err as Error).message });
       }
-
-      const jid = toBaileysJid(chatIdRaw);
-      const rawId = parts.length >= 3 ? (parts[parts.length - 1] ?? '') : messageId;
-      const fromMe = parts.length >= 3 ? parts[0] === 'true' : false;
+      const jid = alvoKey.remoteJid;
+      const rawId = alvoKey.id;
+      // Reação a mensagem RECEBIDA é o caso comum; o keyFromId assume fromMe=true
+      // para id cru (pensando em apagar/editar o que enviamos), então aqui
+      // preservamos o que o id serializado disser.
+      const fromMe = /^(true|false)_/.test(messageId) ? messageId.startsWith('true_') : false;
 
       const sock = sessions.requireSocket(session);
       const sent = await sock.sendMessage(jid, {

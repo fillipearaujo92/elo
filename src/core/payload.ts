@@ -38,6 +38,12 @@ export interface MessagePayloadOptions {
    * estiver na key da mensagem — e o caminho que impede o LID de vazar como numero.
    */
   overridePhone?: string | null;
+  /**
+   * Assunto do grupo. O consumidor usa como NOME da conversa; sem ele o grupo
+   * apareceria como "Grupo 120363...". Nao vem na mensagem — o session-manager
+   * resolve via groupMetadata (com cache) e passa aqui.
+   */
+  groupSubject?: string | null;
   /** Nome do contato quando a mensagem nao traz pushName (vem dos eventos de contato). */
   nameFallback?: string | null;
 }
@@ -82,6 +88,9 @@ export function buildMessagePayload(
 
   const payload: Record<string, unknown> = {
     id: serializeMsgId(key),
+    // `chatName` e o campo que o tradutor do consumidor le para o nome do grupo
+    // (waha-translate.js). So faz sentido em grupo.
+    ...(isGroup && opts.groupSubject ? { chatName: opts.groupSubject } : {}),
     timestamp: normalizeTimestamp(msg.messageTimestamp),
     from,
     fromMe: !!key.fromMe,

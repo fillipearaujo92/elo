@@ -330,7 +330,7 @@ costuma identificar cliente.
 ```bash
 npm ci
 npm run dev          # watch
-npm test             # 242 testes
+npm test             # 246 testes
 npm run typecheck
 ```
 

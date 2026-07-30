@@ -477,3 +477,50 @@ describe('resendMessage', () => {
     assert.equal(enviados.length, 0);
   });
 });
+
+// keyFromId — reconhecer o id serializado por PADRAO, nao por contagem de partes.
+//
+// O split ingenuo por '_' produzia key ERRADA em dois casos (medidos):
+//   'true_...@c.us_ABC_123' -> raw="123", chat="...@c.us_ABC"  (mensagem errada!)
+//   'true_ABC123'           -> 2 partes, virava id cru inteiro
+// Nos 892 ids reais do banco nenhum tem underscore, entao o risco pratico era
+// baixo — mas apagar/editar a mensagem ERRADA e grave o bastante para blindar.
+describe('keyFromId: ids malformados nao viram key errada', () => {
+  it('id serializado normal funciona (@c.us, @lid, @g.us)', async () => {
+    for (const [id, raw, chat] of [
+      ['true_5511999999999@c.us_ABC123', 'ABC123', '5511999999999@s.whatsapp.net'],
+      ['false_12455438745648@lid_ABC123', 'ABC123', '12455438745648@lid'],
+      ['false_120363402863588220@g.us_XYZ', 'XYZ', '120363402863588220@g.us'],
+    ] as Array<[string, string, string]>) {
+      const res = await post('/api/deleteMessage', { session: 's', messageId: id });
+      assert.equal(res.statusCode, 200, id);
+      const del = enviados.at(-1)!.content.delete as { id: string };
+      assert.equal(del.id, raw, id);
+      assert.equal(enviados.at(-1)!.jid, chat, id);
+    }
+  });
+
+  it('REGRESSAO: id com underscore extra e REJEITADO, nao usado errado', async () => {
+    // Antes: raw="123" e chat="5511999999999@c.us_ABC" -> operava em outra msg.
+    const res = await post('/api/deleteMessage', {
+      session: 's', messageId: 'true_5511999999999@c.us_ABC_123',
+    });
+    assert.equal(res.statusCode, 400);
+    assert.equal(enviados.length, 0, 'nada pode ser apagado com id ambiguo');
+  });
+
+  it('REGRESSAO: formato parcial (true_ABC123) e rejeitado', async () => {
+    const res = await post('/api/deleteMessage', { session: 's', messageId: 'true_ABC123' });
+    assert.equal(res.statusCode, 400);
+    assert.equal(enviados.length, 0);
+  });
+
+  it('chatId informado GANHA do chat embutido no id', async () => {
+    // Permite operar numa mensagem cujo id veio de outro contexto.
+    await post('/api/deleteMessage', {
+      session: 's', messageId: 'true_5511999999999@c.us_ABC123',
+      chatId: '5511888888888@c.us',
+    });
+    assert.equal(enviados[0]!.jid, '5511888888888@s.whatsapp.net');
+  });
+});

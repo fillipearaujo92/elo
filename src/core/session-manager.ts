@@ -35,7 +35,7 @@ import QRCode from 'qrcode';
 import { config } from '../config.js';
 import { clearAuthState, forgetAuthQueue, usePostgresAuthState } from './auth-state.js';
 import { events } from './events.js';
-import { inc } from './metrics.js';
+import { forgetSession, inc } from './metrics.js';
 import { extractLidPairs, isLid, phoneFromJid, senderPhoneOf } from './lid.js';
 import { MediaStore } from './media.js';
 import { buildAckPayload, buildMessagePayload, buildSessionStatusPayload } from './payload.js';
@@ -221,6 +221,18 @@ export class SessionManager {
   private readonly sessions = new Map<string, LiveSession>();
   /** start() em voo por sessao — evita dois sockets por chamadas concorrentes. */
   private readonly starting = new Map<string, Promise<void>>();
+  /**
+   * Assunto (nome) dos grupos, em cache.
+   *
+   * O nome do grupo NAO vem na mensagem: exige `groupMetadata(jid)`, que e uma ida
+   * a rede. Sem cache seria uma consulta POR MENSAGEM de grupo — em grupo movimentado
+   * isso e rajada de requisicao ao WhatsApp (risco de rate-limit) e latencia no
+   * caminho do inbound.
+   *
+   * O consumidor precisa do nome para exibir a conversa: sem ele, o grupo apareceria
+   * como "Grupo 120363..." no painel.
+   */
+  private readonly groupSubjects = new Map<string, { subject: string; at: number }>();
   /**
    * Ultima presenca conhecida por sessao+chat.
    *
@@ -617,6 +629,8 @@ export class SessionManager {
     this.sessions.delete(name);
     // Libera a fila de escrita da sessao (evita crescer o mapa sem limite).
     forgetAuthQueue(name);
+    // E os contadores: senao o /metrics segue emitindo series de sessao apagada.
+    forgetSession(name);
     await clearAuthState(this.pool, name);
     // ON DELETE CASCADE limpa auth_keys/auth_creds/sent_messages/lid_map.
     await this.pool.query(`DELETE FROM wa_gateway.sessions WHERE name = $1`, [name]);
@@ -714,6 +728,41 @@ export class SessionManager {
         .sort((a, b) => b[1].at - a[1].at)[0]?.[1];
     if (!achada) return null;
     return { presence: achada.state, lastSeen: achada.lastSeen, updatedAt: achada.at };
+  }
+
+  /**
+   * Assunto do grupo, do cache ou da rede.
+   *
+   * Best-effort: se a consulta falhar, devolve null e o consumidor usa o fallback.
+   * Nunca lanca — o nome do grupo e informacao de exibicao, nao pode impedir a
+   * mensagem de ser entregue.
+   */
+  private async groupSubjectOf(live: LiveSession, groupJid: string): Promise<string | null> {
+    const TTL = 6 * 60 * 60_000;
+    const TETO = 2_000;
+    const chave = `${live.name}|${groupJid}`;
+    const cache = this.groupSubjects.get(chave);
+    if (cache && Date.now() - cache.at < TTL) return cache.subject;
+
+    try {
+      const meta = await live.sock?.groupMetadata(groupJid);
+      const subject = meta?.subject?.trim();
+      if (!subject) return cache?.subject ?? null;
+      if (this.groupSubjects.size >= TETO && !this.groupSubjects.has(chave)) {
+        // Map preserva ordem de insercao: a primeira chave e a mais antiga.
+        const primeira = this.groupSubjects.keys().next().value;
+        if (primeira) this.groupSubjects.delete(primeira);
+      }
+      this.groupSubjects.set(chave, { subject, at: Date.now() });
+      return subject;
+    } catch (err) {
+      this.log.debug(
+        { session: live.name, groupJid, err: (err as Error).message },
+        'nao consegui o assunto do grupo; usando o que houver em cache',
+      );
+      // Cache expirado ainda serve: nome velho e melhor que "Grupo 120363...".
+      return cache?.subject ?? null;
+    }
   }
 
   requireSocket(name: string): WASocket {
@@ -1323,10 +1372,14 @@ export class SessionManager {
       resolvedName ??
       (effectivePhone ? this.contactName(live.name, effectivePhone) : null);
 
+    // Nome do grupo (cacheado): sem ele o consumidor exibe "Grupo 120363...".
+    const groupSubject = isGroup ? await this.groupSubjectOf(live, remoteJid) : null;
+
     const payload = buildMessagePayload(msg, {
       mediaUrl,
       overridePhone: resolvedPhone,
       nameFallback,
+      groupSubject,
     });
 
     events.emit(

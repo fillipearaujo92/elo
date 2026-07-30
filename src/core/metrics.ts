@@ -89,6 +89,18 @@ export function resetMetrics(): void {
   counters.clear();
 }
 
+/**
+ * Esquece os contadores de uma sessão removida.
+ *
+ * Sem isto, cada sessão apagada deixava até 14 séries residuais para sempre: o
+ * /metrics seguiria emitindo dados de canal que não existe mais, o Prometheus as
+ * manteria como séries ativas, e o nome do cliente continuaria exposto depois da
+ * exclusão — contrariando o motivo pelo qual o endpoint pede autenticação.
+ */
+export function forgetSession(session: string): void {
+  for (const porSessao of counters.values()) porSessao.delete(session);
+}
+
 /** Leitura de um contador — para o painel e os testes. */
 export function get(name: CounterName, session?: string): number {
   const porSessao = counters.get(name);

@@ -173,10 +173,23 @@ describe('typing', () => {
 });
 
 describe('presence', () => {
-  it('aceita os estados do WhatsApp', async () => {
-    for (const p of ['available', 'unavailable', 'composing', 'recording', 'paused']) {
+  it('aceita os 5 estados do WhatsApp (os de conversa exigem chatId)', async () => {
+    // ★ O teste ANTIGO mandava os 5 sem chatId e passava — mas so porque o socket
+    // falso aceita qualquer coisa. No Baileys real, 'composing'/'recording'/'paused'
+    // sem destino fazem jidDecode(undefined) e estouram (chats.js:624) -> 500.
+    // Dava falsa confianca exatamente neste caminho.
+    for (const p of ['available', 'unavailable']) {
       const res = await post('/api/presence', { session: 's', presence: p });
-      assert.equal(res.statusCode, 200, p);
+      assert.equal(res.statusCode, 200, `${p} vale para a conta inteira`);
+    }
+    for (const p of ['composing', 'recording', 'paused']) {
+      const comChat = await post('/api/presence', {
+        session: 's', chatId: '5511999999999@c.us', presence: p,
+      });
+      assert.equal(comChat.statusCode, 200, `${p} com chatId`);
+      const semChat = await post('/api/presence', { session: 's', presence: p });
+      assert.equal(semChat.statusCode, 400, `${p} SEM chatId tem de ser 400, nao 500`);
+      assert.match(semChat.json().message, /chatId/);
     }
   });
 

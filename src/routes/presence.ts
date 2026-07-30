@@ -27,6 +27,34 @@ interface Deps {
 /** Estados aceitos, no vocabulário do WhatsApp. */
 const PRESENCAS = new Set(['available', 'unavailable', 'composing', 'recording', 'paused']);
 
+/**
+ * Estados que o WhatsApp aceita SEM destino (aplicam-se à conta inteira).
+ *
+ * Os outros três são de conversa: o Baileys faz `jidDecode(toJid)` para montar o
+ * nó `chatstate`, e com `toJid` undefined isso estoura
+ * (`Cannot destructure property 'server' of undefined` — lib/Socket/chats.js:624),
+ * devolvendo 500 em vez de dizer que falta o chatId.
+ */
+const PRESENCA_GLOBAL = new Set(['available', 'unavailable']);
+
+/** Teto de ids por chamada de markAsRead. Ver o comentário na rota. */
+const MAX_READ_IDS = 500;
+
+/**
+ * Laço de renovação de "digitando…" em andamento, por sessão+chat.
+ *
+ * ★ Sem este registro, cada chamada abria um laço NOVO. O padrão natural do
+ * consumidor — chamar typing a cada poucos segundos enquanto gera uma resposta —
+ * criava dezenas de laços concorrentes no mesmo chat: dezenas de closures no
+ * heap, rajada de `chatstate` para o WhatsApp (risco de reputação do número), e
+ * o pior: o primeiro laço a esgotar mandava `paused` e APAGAVA o indicador que
+ * os outros ainda renovavam — o "digitando" morria no meio da resposta, que é
+ * exatamente o que a funcionalidade existe para evitar.
+ *
+ * Agora uma chamada nova só ESTENDE o prazo do laço existente.
+ */
+const renovando = new Map<string, { fim: number }>();
+
 export function registerPresenceRoutes(app: FastifyInstance, { sessions }: Deps): void {
   function alvo(body: { session?: string; chatId?: string } | undefined): {
     session: string;
@@ -72,23 +100,40 @@ export function registerPresenceRoutes(app: FastifyInstance, { sessions }: Deps)
     // Renovação: teto de 60s para uma chamada não prender um handler à toa.
     const dur = Math.min(Math.max(Number(req.body?.duration ?? 0) || 0, 0), 60_000);
     if (dur > 0) {
-      // Não aguardamos o fim: a resposta volta na hora e o indicador segue vivo
-      // em background. Prender a requisição por 60s desperdiçaria conexão.
-      void (async () => {
-        const fim = Date.now() + dur;
-        while (Date.now() < fim) {
-          // ~4s: abaixo da expiração do WhatsApp (~10s), com margem.
-          await new Promise((r) => setTimeout(r, 4_000).unref?.());
+      const chave = `${session}|${jid}`;
+      const fim = Date.now() + dur;
+      const emCurso = renovando.get(chave);
+      if (emCurso) {
+        // Já há laço para este chat: só estende o prazo. Abrir outro faria os dois
+        // renovarem em paralelo e o primeiro a terminar mataria o indicador.
+        emCurso.fim = Math.max(emCurso.fim, fim);
+      } else {
+        const estado = { fim };
+        renovando.set(chave, estado);
+        // Não aguardamos o fim: a resposta volta na hora e o indicador segue vivo
+        // em background. Prender a requisição por 60s desperdiçaria conexão.
+        void (async () => {
           try {
-            // A sessão pode cair no meio; parar em silêncio é o certo aqui.
-            sessions.requireSocket(session);
-            await sock.sendPresenceUpdate(kind, jid);
+            while (Date.now() < estado.fim) {
+              // ~4s: abaixo da expiração do WhatsApp (~10s), com margem.
+              await new Promise((r) => setTimeout(r, 4_000).unref?.());
+              // ★ RE-OBTÉM o socket a cada volta e usa ESTE, não o do closure.
+              // Se a sessão reconectar no meio (restart, ou backoff após queda),
+              // `live.sock` passa a ser outro objeto e escrever no antigo falha em
+              // silêncio — a mesma classe de bug de "referência obsoleta" que já
+              // custou caro neste projeto.
+              const atual = sessions.requireSocket(session);
+              await atual.sendPresenceUpdate(kind, jid);
+            }
+            const fimSock = sessions.requireSocket(session);
+            await fimSock.sendPresenceUpdate('paused', jid);
           } catch {
-            return;
+            // Sessão caiu ou foi removida: parar em silêncio é o certo.
+          } finally {
+            renovando.delete(chave);
           }
-        }
-        await sock.sendPresenceUpdate('paused', jid).catch(() => {});
-      })();
+        })();
+      }
     }
 
     return { success: true, typing: true, kind, duration: dur || undefined };
@@ -111,8 +156,17 @@ export function registerPresenceRoutes(app: FastifyInstance, { sessions }: Deps)
         { statusCode: 400 },
       );
     }
-    const sock = sessions.requireSocket(session);
     const jid = req.body?.chatId?.trim() ? toBaileysJid(req.body.chatId.trim()) : undefined;
+    // ★ 'composing'/'recording'/'paused' são de CONVERSA: sem chatId o Baileys
+    // faz jidDecode(undefined) e estoura (chats.js:624), virando 500. Melhor um
+    // 400 dizendo o que falta.
+    if (!jid && !PRESENCA_GLOBAL.has(presence)) {
+      throw new Boom(
+        `presence "${presence}" exige chatId (so ${[...PRESENCA_GLOBAL].join('/')} valem para a conta inteira)`,
+        { statusCode: 400 },
+      );
+    }
+    const sock = sessions.requireSocket(session);
     await sock.sendPresenceUpdate(presence as never, jid);
     return { success: true, presence, chatId: jid ?? null };
   });
@@ -130,6 +184,17 @@ export function registerPresenceRoutes(app: FastifyInstance, { sessions }: Deps)
     const ids = req.body?.messageIds ?? (req.body?.messageId ? [req.body.messageId] : []);
     if (!Array.isArray(ids) || ids.length === 0) {
       throw new Boom('messageIds e obrigatorio (lista de ids)', { statusCode: 400 });
+    }
+    // ★ Teto de ids. O readMessages do Baileys agrega por jid e monta UM nó
+    // `receipt` com todos os itens num só frame (messages-send.js:102-116), sem
+    // fatiar. Como aqui todas as keys compartilham o mesmo chat, 10 mil ids
+    // gerariam um frame de centenas de KB — o WhatsApp derruba a conexão nesse
+    // tamanho, e a queda afeta a SESSÃO INTEIRA, não só esta chamada.
+    if (ids.length > MAX_READ_IDS) {
+      throw new Boom(
+        `no maximo ${MAX_READ_IDS} ids por chamada (recebidos ${ids.length})`,
+        { statusCode: 400 },
+      );
     }
 
     // fromMe: false — só faz sentido marcar como lida a mensagem DO CONTATO.
