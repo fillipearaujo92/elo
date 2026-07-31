@@ -19,6 +19,7 @@ import { registerSessionRoutes } from './routes/sessions.js';
 import { renderPrometheus } from './core/metrics.js';
 import { backupStatus, dumpAuth, restoreAuth, setMark } from './core/backup.js';
 import { startJanitor } from './core/janitor.js';
+import { isAuthorized, isPublicPath } from './core/access.js';
 import { buildOpenApi } from './openapi.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -43,35 +44,16 @@ const app = Fastify({
 });
 
 // ── Autenticacao ───────────────────────────────────────────────────────────
-// X-Api-Key em tudo, exceto health check e download de midia.
+// A POLITICA (o que e publico, o que exige chave) mora em src/core/access.ts, que
+// e puro e testado. Aqui fica so a ligacao com o Fastify.
 //
-// O download de midia fica fora porque o backend baixa a URL com a chave, mas outros
-// consumidores (o proprio chat servindo a imagem) podem nao ter. A URL carrega nome
-// aleatorio de 12 hex, o que a torna nao-adivinhavel; ainda assim e um trade-off
-// consciente e documentado: quem tiver a URL exata acessa o arquivo.
-// '/' e '/dashboard' servem o painel de operação. São públicos porque a PÁGINA em
-// si não expõe dado nenhum: ela pede a chave num formulário e só então consome a
-// API (que segue protegida). Servir o HTML atrás de auth exigiria um segundo
-// mecanismo de sessão sem ganho real de segurança.
-// `/docs` e `/openapi.json` são públicos: são DOCUMENTAÇÃO, e exigir chave para
-// ler a documentação é atrito sem ganho — a spec descreve a forma da API, não
-// expõe dado nenhum. Quem for TESTAR pelo Swagger informa a chave lá.
-const PUBLIC_PATHS = new Set([
-  '/health', '/healthz', '/', '/dashboard', '/docs', '/openapi.json',
-]);
-
+// Este hook nao repete a regra de proposito: enquanto ela vivia inline aqui, o
+// server.ts nao tinha teste nenhum e os testes de rota recriavam o hook A MAO — o
+// que os testes exercitavam nao era o que producao rodava. Foi assim que os assets
+// do Swagger ficaram em 401 com o CI verde.
 app.addHook('onRequest', async (req, reply) => {
-  if (PUBLIC_PATHS.has(req.url.split('?')[0] ?? '')) return;
-  if (req.url.startsWith('/api/files/')) return;
-  // ★ Assets do Swagger UI. Sem isto, /docs carregava e o CSS/JS tomava 401 — a
-  // página abria sem estilo e sem funcionar (medido no beta). A lista de arquivos
-  // servidos é fechada (SWAGGER_ASSETS), então liberar o prefixo aqui não expõe
-  // node_modules.
-  if (req.url.startsWith('/docs/')) return;
-
-  const key = req.headers['x-api-key'];
-  const provided = Array.isArray(key) ? key[0] : key;
-  if (!provided || provided !== config.apiKey) {
+  if (isPublicPath(req.url)) return;
+  if (!isAuthorized(req.headers['x-api-key'], config.apiKey)) {
     return reply.code(401).send({ message: 'unauthorized' });
   }
 });
@@ -82,13 +64,21 @@ const webhooks = new WebhookEmitter(app.log as never);
 const sessions = new SessionManager(pool, app.log as never, webhooks, media);
 
 // ── Rotas ──────────────────────────────────────────────────────────────────
-app.get('/health', async () => {
+//
+// ★ `/healthz` e alias de `/health`. Estava na lista de caminhos PUBLICOS desde o
+// inicio, mas a rota nunca foi registrada: dava 404 — medido no beta. Ou seja, a
+// politica liberava uma rota fantasma, e quem seguisse a convencao do Kubernetes
+// (que e de onde vem o nome `healthz`) tomava 404 no probe e concluiria que o
+// gateway estava fora. Registrar o alias custa uma linha e honra a convencao.
+const healthHandler = async (): Promise<Record<string, unknown>> => {
   // Health check real: valida o banco, nao apenas o processo. Um gateway que perdeu
   // o Postgres nao consegue restaurar sessao nem gravar creds — nao esta saudavel.
   await pool.query('SELECT 1');
   // `engine` e lido pelo driver do backend; version/commit sao do painel.
   return { status: 'ok', engine: 'BAILEYS', version: VERSION, commit: COMMIT };
-});
+};
+app.get('/health', healthHandler);
+app.get('/healthz', healthHandler);
 
 // ── Painel de operação ─────────────────────────────────────────────────────
 // HTML autocontido (CSS+JS inline, ícones SVG inline): sem CDN, sem build step.
