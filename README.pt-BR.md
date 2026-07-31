@@ -333,6 +333,17 @@ ausência** — o gateway já registrava os descartes no log e não avisava ning
 Falha silenciosa é o pior modo de falha de um gateway, e é o que esses contadores
 tornam visível.
 
+A manutenção também aparece aqui, e é rotina, não alarme:
+
+```
+elo_sent_messages_purged_total{session="*"}   linhas apagadas pela retenção
+```
+
+O ELO guarda o que enviou por `SENT_MESSAGES_RETENTION_DAYS` (7 por padrão) para
+poder responder a retry receipts, e uma limpeza de hora em hora apaga o que passou
+dessa idade. Use `0` para desligar a limpeza — a tabela passa a crescer sem teto, no
+mesmo volume onde vive o pareamento.
+
 Exemplo de alerta (Prometheus):
 
 ```yaml

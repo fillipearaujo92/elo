@@ -49,7 +49,13 @@ export type CounterName =
   | 'disconnect_total'
   | 'reconnect_total'
   /** QR gerado (útil para ver sessão em loop de pareamento). */
-  | 'qr_total';
+  | 'qr_total'
+  /**
+   * Linhas de `sent_messages` apagadas pela limpeza. Contador GLOBAL (sessão '*').
+   * Serve para responder "a purga está rodando?" — antes ela não existia, e a
+   * retenção de 7 dias era documentação de comportamento inexistente.
+   */
+  | 'sent_messages_purged_total';
 
 const HELP: Record<CounterName, string> = {
   inbound_total: 'Mensagens recebidas e repassadas',
@@ -67,6 +73,7 @@ const HELP: Record<CounterName, string> = {
   disconnect_total: 'Quedas de conexao',
   reconnect_total: 'Reconexoes iniciadas',
   qr_total: 'QR codes gerados',
+  sent_messages_purged_total: 'Linhas de sent_messages apagadas pela limpeza (retencao)',
 };
 
 /** contador -> sessão -> valor. */

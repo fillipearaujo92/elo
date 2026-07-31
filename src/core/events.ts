@@ -22,7 +22,8 @@ export type EventKind =
   | 'lid'          // LID resolvido para telefone
   | 'webhook'      // entrega de webhook (sucesso/falha)
   | 'error'        // falha relevante (decrypt, envio, etc)
-  | 'media';       // download de mídia
+  | 'media'        // download de mídia
+  | 'janitor';     // limpeza periódica (retenção de sent_messages)
 
 export interface GatewayEvent {
   /** Sequencial monotônico: o cliente usa para não reprocessar o que já viu. */

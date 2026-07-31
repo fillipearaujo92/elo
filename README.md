@@ -358,6 +358,17 @@ arrived** — the gateway was already logging the drops and telling nobody. Sile
 failure is the worst failure mode for a gateway, and these counters make it
 visible.
 
+Housekeeping shows up here too, and it is routine rather than an alarm:
+
+```
+elo_sent_messages_purged_total{session="*"}   rows dropped by retention
+```
+
+ELO keeps what it sent for `SENT_MESSAGES_RETENTION_DAYS` (7 by default) so it can
+answer retry receipts, and an hourly sweep drops anything older. Set it to `0` to
+disable the sweep — the table then grows without bound, in the same volume that
+holds your pairing.
+
 Example Prometheus alerts:
 
 ```yaml

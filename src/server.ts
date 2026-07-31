@@ -18,6 +18,7 @@ import { registerPresenceRoutes } from './routes/presence.js';
 import { registerSessionRoutes } from './routes/sessions.js';
 import { renderPrometheus } from './core/metrics.js';
 import { backupStatus, dumpAuth, restoreAuth, setMark } from './core/backup.js';
+import { startJanitor } from './core/janitor.js';
 import { buildOpenApi } from './openapi.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -369,13 +370,25 @@ async function main(): Promise<void> {
   // container por health check falho durante o boot.
   await sessions.restoreAll();
   app.log.info('restauracao concluida');
+
+  // Limpeza da retencao. Depois do restoreAll de proposito: a primeira volta ja e
+  // adiada em 30s, e o que importa no boot e as sessoes voltarem, nao apagar linha
+  // antiga. Ver src/core/janitor.ts para o porque disto nao existir antes.
+  pararJanitor = startJanitor({ pool, log: app.log, events });
 }
+
+/** Para o timer da limpeza no shutdown. */
+let pararJanitor: (() => void) | null = null;
 
 let shuttingDown = false;
 async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   app.log.info({ signal }, 'encerrando');
+  // Para a limpeza ANTES de fechar o pool: um DELETE em voo tomaria erro de pool
+  // encerrado, que e ruido no log de shutdown e nada mais — mas ruido que ja
+  // confundiu diagnostico neste projeto.
+  pararJanitor?.();
   // Fecha o HTTP primeiro (para de aceitar envio), depois os sockets, depois o banco.
   await app.close().catch(() => {});
   await sessions.shutdown().catch(() => {});
