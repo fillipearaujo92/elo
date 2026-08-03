@@ -21,6 +21,8 @@
 // funcao pura e a unica forma de travar isso em teste. O hook do server.ts agora
 // delega para `isPublicPath` e nao repete a regra.
 
+import { createHash, timingSafeEqual } from 'node:crypto';
+
 /**
  * Caminhos EXATOS que dispensam a chave.
  *
@@ -82,5 +84,34 @@ export function isPublicPath(url: string): boolean {
 export function isAuthorized(header: string | string[] | undefined, apiKey: string): boolean {
   if (!apiKey) return false;
   const provided = Array.isArray(header) ? header[0] : header;
-  return !!provided && provided === apiKey;
+  if (!provided) return false;
+  return mesmaChave(provided, apiKey);
+}
+
+/**
+ * Compara duas chaves em tempo constante.
+ *
+ * `===` em string faz short-circuit no primeiro byte divergente, entao o tempo de
+ * resposta vaza quantos bytes iniciais estao certos. Sozinho isso e dificil de
+ * explorar sobre HTTP (o jitter da rede afoga o sinal), mas o gateway nao tinha
+ * NENHUM rate limit: o atacante tinha orcamento infinito de tentativas, e volume
+ * suficiente vence ruido. O rate limit fecha o outro lado do mesmo problema.
+ *
+ * ★ Compara os HASHES, nao os valores. `timingSafeEqual` exige buffers do mesmo
+ * tamanho — passar os valores crus vazaria o COMPRIMENTO da chave (ou lancaria, o
+ * que vaza a mesma coisa pelo tipo de erro). SHA-256 normaliza tudo em 32 bytes, e
+ * comparar hashes de tamanho fixo remove as duas fugas de uma vez.
+ *
+ * ⚠ LIMITE DE COBERTURA, registrado por honestidade: nenhum teste aqui detecta a
+ * troca de `timingSafeEqual` por `===`. Verifiquei por mutacao — voltar para `===`
+ * deixa a suite 100% verde. Constant-time e propriedade de TEMPO, e medir timing em
+ * teste unitario e instavel por natureza (o jitter da maquina de CI afoga a
+ * diferenca). O que OS TESTES cobrem e o efeito colateral: usar os valores crus no
+ * lugar dos hashes quebra 5 testes. Quem mexer nesta funcao precisa saber que o
+ * compilador e a suite nao vao avisar; o comentario e a unica guarda.
+ */
+function mesmaChave(a: string, b: string): boolean {
+  const ha = createHash('sha256').update(a, 'utf8').digest();
+  const hb = createHash('sha256').update(b, 'utf8').digest();
+  return timingSafeEqual(ha, hb);
 }

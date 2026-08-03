@@ -156,4 +156,22 @@ describe('isAuthorized: comparacao da chave', () => {
     assert.equal(isAuthorized('segredoo', 'segredo'), false);
     assert.equal(isAuthorized('SEGREDO', 'segredo'), false);
   });
+
+  it('★ chave de tamanho diferente nao lanca (comparacao por hash)', () => {
+    // A comparacao passou a ser `timingSafeEqual` sobre SHA-256 dos dois valores.
+    // `timingSafeEqual` LANCA se os buffers tiverem tamanhos diferentes — passar os
+    // valores crus faria uma chave de tamanho errado virar erro 500 em vez de 401, e o
+    // TIPO do erro vazaria o comprimento da chave correta. Hashear normaliza em 32
+    // bytes e remove a fuga. Este teste garante que nao voltamos aos valores crus.
+    for (const tentativa of ['x', '', 'a'.repeat(500), 'segredo-quase-certo']) {
+      assert.doesNotThrow(() => isAuthorized(tentativa, 'segredo'), `tentativa: ${tentativa.length} chars`);
+      if (tentativa) assert.equal(isAuthorized(tentativa, 'segredo'), false);
+    }
+  });
+
+  it('chave unicode e comparada corretamente', () => {
+    // Hash sobre utf8 — uma chave com acento ou emoji tem de continuar funcionando.
+    assert.equal(isAuthorized('chave-com-acentuação', 'chave-com-acentuação'), true);
+    assert.equal(isAuthorized('chave-com-acentuacao', 'chave-com-acentuação'), false);
+  });
 });

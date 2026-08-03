@@ -1,10 +1,13 @@
 // src/routes/sessions.ts
 //
-// Endpoints de sessao no formato desta API. Consumidos pelo cliente da API para: ler o estado da sessao, iniciar/parar,
-// obter o QR, remover a sessao e ajustar filtros de chat.
+// Endpoints de sessao no formato WAHA. Consumidos por:
+//   - wa-provider/waha.js: connectionState, start, ensureSessionAndQR, deleteInstance,
+//     setIgnoreGroups
+//   - routes/channels.js do backend (criacao de canal e QR na UI)
 
 import type { FastifyInstance } from 'fastify';
 import { snapshot } from '../core/metrics.js';
+import { fetchGuardado, verificarUrl } from '../core/net-guard.js';
 import { uniqueSlug, validateName } from '../core/slug.js';
 import type { SessionManager } from '../core/session-manager.js';
 import type { SessionConfig } from '../core/session-manager.js';
@@ -15,8 +18,8 @@ interface Deps {
 
 export function registerSessionRoutes(app: FastifyInstance, { sessions }: Deps): void {
   // POST /api/sessions — cria (e opcionalmente inicia) a sessao.
-  // O cliente manda { name, start: true, config: { webhooks: [...] } }. O 422
-  // "already exists" e benigno: reaplique o config via PUT.
+  // O driver manda { name, start: true, config: { webhooks: [...] } } e trata 422
+  // "already exists" como benigno (waha.js:205), reaplicando o config via PUT.
   app.post<{ Body: { name?: string; label?: string; start?: boolean; config?: SessionConfig } }>(
     '/api/sessions',
     async (req, reply) => {
@@ -28,7 +31,7 @@ export function registerSessionRoutes(app: FastifyInstance, { sessions }: Deps):
       // caminho de mídia, chaves do auth state). Ver src/core/slug.ts.
       //
       // Compatibilidade: quando o nome JÁ é um slug válido (é o caso do backend
-      // do consumidor, que envia channels.identifier slugificado), usamos como está —
+      // do Sysled, que envia channels.identifier slugificado), usamos como está —
       // assim nada muda para quem já integra.
       const v = validateName(raw);
       if (!v.ok) return reply.code(400).send({ message: v.error });
@@ -80,7 +83,7 @@ export function registerSessionRoutes(app: FastifyInstance, { sessions }: Deps):
   });
 
   // GET /api/stats — contadores por sessão, para o painel de operação.
-  // Não faz parte do contrato desta API; é endpoint próprio.
+  // Não faz parte do contrato do WAHA; é endpoint próprio.
   // Contadores do banco + metricas em memoria, por sessao. O painel usa isto para
   // mostrar "esta perdendo mensagem?" sem o operador abrir o Prometheus.
   app.get('/api/stats', async () => {
@@ -197,9 +200,32 @@ export function registerSessionRoutes(app: FastifyInstance, { sessions }: Deps):
         if (h?.name) headers[h.name] = h.value ?? '';
       }
 
+      // ★ Guarda de SSRF ANTES de qualquer coisa, e com resposta PROPRIA.
+      //
+      // Esta rota e o pior vetor do gateway: ela devolve `body.slice(0,200)` do
+      // destino, entao e um leitor de rede interna com feedback imediato. MEDIDO no
+      // beta antes da correcao: com `webhookUrl=http://127.0.0.1:3000/health` ela
+      // devolveu o corpo da resposta interna do proprio container.
+      //
+      // O veredito e checado aqui em vez de deixar o `fetchGuardado` lancar porque o
+      // `catch` abaixo transforma qualquer excecao em `{ok:false, hint:'nao foi
+      // possivel alcancar o destino'}` — o operador leria "rede fora do ar" quando a
+      // verdade e "esta URL e proibida". Erro que mente e pior que erro cru.
+      const veredito = await verificarUrl(wh.url);
+      if (!veredito.ok) {
+        return reply.code(422).send({
+          ok: false,
+          status: 0,
+          url: wh.url,
+          code: 'url_blocked',
+          error: `URL bloqueada (${veredito.motivo}${veredito.detalhe ? `: ${veredito.detalhe}` : ''})`,
+          hint: 'o gateway nao busca enderecos internos: use um host publico, ou ligue ALLOW_PRIVATE_FETCH=1 se o destino esta na sua rede interna de proposito',
+        });
+      }
+
       const started = Date.now();
       try {
-        const res = await fetch(wh.url, {
+        const res = await fetchGuardado(wh.url, {
           method: 'POST',
           headers,
           // session.status é inócuo: o consumidor só relê o status que já é o atual.
@@ -236,6 +262,12 @@ export function registerSessionRoutes(app: FastifyInstance, { sessions }: Deps):
           error: msg,
           hint: /timeout|abort/i.test(msg)
             ? 'o destino nao respondeu em 15s'
+            // `redirect: 'error'` faz parte da guarda de SSRF: sem ela, um host
+            // publico que responde 302 para 169.254.169.254 contornaria a validacao.
+            // O erro do undici para isso e opaco ("unexpected redirect"), entao
+            // traduzimos — senao o operador procura problema de rede a esmo.
+            : /redirect/i.test(msg)
+            ? 'o destino respondeu com redirecionamento, que o gateway nao segue (protecao contra SSRF); aponte direto para a URL final'
             : 'nao foi possivel alcancar o destino (DNS, rede ou servico fora do ar)',
         };
       }

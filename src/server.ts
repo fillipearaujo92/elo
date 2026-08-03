@@ -20,6 +20,7 @@ import { renderPrometheus } from './core/metrics.js';
 import { backupStatus, dumpAuth, restoreAuth, setMark } from './core/backup.js';
 import { startJanitor } from './core/janitor.js';
 import { isAuthorized, isPublicPath } from './core/access.js';
+import rateLimit from '@fastify/rate-limit';
 import { buildOpenApi } from './openapi.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -36,12 +37,96 @@ export const VERSION = pkg.version ?? '0.0.0';
 export const COMMIT = process.env.COMMIT_SHA ?? null;
 
 const app = Fastify({
-  logger: { level: config.logLevel },
+  logger: {
+    level: config.logLevel,
+    // ★ Sem `redact`, havia vazamento CONCRETO: core/webhook.ts loga `url: w.url` em
+    // erro e em esgotamento de tentativas, e URL de webhook com token embutido
+    // (`https://host/hook?token=...` ou `https://user:senha@host/hook`) ia para o log
+    // em texto puro. Log costuma ser o lugar menos protegido da instalacao — vai para
+    // arquivo, para o journald, e para qualquer coletor.
+    //
+    // `censor` explicito em vez de remover a chave: ver `[oculto]` no log diz que o
+    // campo EXISTE e foi escondido; um campo ausente parece bug de instrumentacao.
+    // ★ Os paths sao CIRURGICOS, e isso foi medido. A primeira versao usava `url` e
+    // `*.url` genericos — e o teste com pino real mostrou que isso censura tambem
+    // `req.url`, o caminho da requisicao no log de acesso. Ou seja: cegava o
+    // diagnostico ("qual rota deu erro?") para esconder algo que nao e segredo.
+    // Protecao que apaga evidencia legitima acaba sendo desligada pelo operador.
+    redact: {
+      paths: [
+        'req.headers["x-api-key"]',
+        'req.headers["X-Api-Key"]',
+        'headers["x-api-key"]',
+        // URL de webhook nos DOIS formatos exatos em que ela aparece nos logs deste
+        // projeto (core/webhook.ts:105,112,132,142). Ver o teste em tests/redact.
+        'w.url',
+        'webhook.url',
+        // Valor de header customizado — e por padrao a chave do webhook.
+        '*.customHeaders[*].value',
+        'config.webhooks[*].customHeaders[*].value',
+      ],
+      censor: '[oculto]',
+    },
+  },
   // Midia em base64 no corpo (o driver manda `file.data`) estoura o default de 1MB.
   bodyLimit: 64 * 1024 * 1024,
   // Confia no proxy (Traefik) para logar o IP real.
   trustProxy: true,
 });
+
+// ── Limite de requisicoes ──────────────────────────────────────────────────
+//
+// ★ Nao havia limite em NENHUMA rota. O hook de auth respondia 401 sem custo, o que
+// dava ao atacante orcamento infinito de tentativas contra a X-Api-Key — e era o que
+// tornava o `===` nao-constant-time de access.ts explorável na pratica (volume vence
+// o ruido da rede). Os dois foram corrigidos juntos porque sao o mesmo problema.
+//
+// Registrado ANTES do hook de auth para que o 429 saia sem nem chegar a comparacao.
+// `keyGenerator` usa o IP real (trustProxy ja resolve o X-Forwarded-For do Traefik).
+await app.register(rateLimit, {
+  global: true,
+  max: config.rateLimitMax,
+  timeWindow: '1 minute',
+  // O probe do orquestrador bate de segundo em segundo e nao pode tomar 429 — um
+  // health check limitado derruba o container em loop.
+  allowList: (req) => req.url === '/health' || req.url === '/healthz',
+  errorResponseBuilder: (_req, ctx) => ({
+    code: 'rate_limited',
+    message: `muitas requisicoes: o limite e ${ctx.max} por minuto`,
+    hint: 'ajuste RATE_LIMIT_MAX se o seu volume legitimo e maior que isso',
+  }),
+});
+
+/**
+ * Contador SEPARADO e agressivo para quem toma 401.
+ *
+ * O limite global e generoso (300/min) para nao atrapalhar operacao real — mas
+ * requisicao sem chave valida nao tem motivo legitimo para repetir dezenas de vezes
+ * por minuto, e e a assinatura de forca bruta. Em memoria de proposito: o gateway e
+ * um processo unico e a janela e de 1 minuto; um Redis aqui seria dependencia nova
+ * para resolver um problema que nao temos.
+ */
+const falhasAuth = new Map<string, { n: number; ate: number }>();
+const JANELA_AUTH_MS = 60_000;
+
+function contarFalhaAuth(ip: string): number {
+  const agora = Date.now();
+  const atual = falhasAuth.get(ip);
+  if (!atual || atual.ate < agora) {
+    falhasAuth.set(ip, { n: 1, ate: agora + JANELA_AUTH_MS });
+    return 1;
+  }
+  atual.n += 1;
+  return atual.n;
+}
+
+// Limpeza da tabela de falhas. Sem isto, um scan distribuido por milhares de IPs
+// cresceria o Map sem teto — vazamento de memoria disfarcado de protecao.
+const limpezaAuth = setInterval(() => {
+  const agora = Date.now();
+  for (const [ip, v] of falhasAuth) if (v.ate < agora) falhasAuth.delete(ip);
+}, JANELA_AUTH_MS);
+limpezaAuth.unref?.();
 
 // ── Autenticacao ───────────────────────────────────────────────────────────
 // A POLITICA (o que e publico, o que exige chave) mora em src/core/access.ts, que
@@ -54,7 +139,26 @@ const app = Fastify({
 app.addHook('onRequest', async (req, reply) => {
   if (isPublicPath(req.url)) return;
   if (!isAuthorized(req.headers['x-api-key'], config.apiKey)) {
-    return reply.code(401).send({ message: 'unauthorized' });
+    const tentativas = contarFalhaAuth(req.ip);
+    if (tentativas > config.rateLimitAuthMax) {
+      return reply.code(429).send({
+        code: 'auth_rate_limited',
+        message: `muitas tentativas com chave invalida (${tentativas} no ultimo minuto)`,
+        hint: 'confira a chave antes de repetir; tentativas seguidas sao tratadas como forca bruta',
+      });
+    }
+    // ★ Mensagem ACIONAVEL. Antes era so `{ message: 'unauthorized' }` — a primeira
+    // mensagem que todo integrador ve, sem dizer qual header, sem dizer de onde vem a
+    // chave, e em ingles contra o resto da API em portugues. E o erro numero 1 em
+    // frequencia no onboarding. `code` estruturado para o cliente tratar sem parsear
+    // texto (antes NENHUMA resposta de erro tinha codigo).
+    return reply.code(401).send({
+      code: 'unauthorized',
+      message: req.headers['x-api-key']
+        ? 'chave invalida no header X-Api-Key'
+        : 'falta o header X-Api-Key',
+      hint: 'use o valor de API_KEY do seu .env no header X-Api-Key',
+    });
   }
 });
 

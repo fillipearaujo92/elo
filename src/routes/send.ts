@@ -1,9 +1,9 @@
 // src/routes/send.ts
 //
-// Endpoints de envio no formato desta API: sendText, sendImage, sendVoice, sendVideo, sendFile.
+// Endpoints de envio no formato WAHA: sendText, sendImage, sendVoice, sendVideo, sendFile.
 //
 // Contrato do retorno: wa-provider/waha.js:extractMsgId() aceita `id` como STRING
-// direto (caminho engine nativa) — devolvemos o id serializado como string em `id`, e o driver
+// direto (caminho GOWS) — devolvemos o id serializado como string em `id`, e o driver
 // considera ok apenas quando ha id (`ok: res.ok && id`). Retornar 200 sem id faz o
 // backend marcar a mensagem como falha.
 
@@ -11,6 +11,7 @@ import { Boom } from '@hapi/boom';
 import type { AnyMessageContent } from 'baileys';
 import type { FastifyInstance } from 'fastify';
 import { inc } from '../core/metrics.js';
+import { fetchGuardado } from '../core/net-guard.js';
 import { serializeMsgId, toBaileysJid } from '../core/waha-compat.js';
 
 import type { SessionManager } from '../core/session-manager.js';
@@ -187,7 +188,12 @@ export function registerSendRoutes(app: FastifyInstance, { sessions }: Deps): vo
     if (file.url) {
       // O Baileys aceita { url } e baixa sozinho, mas assim o erro de download fica
       // opaco (vira falha de envio sem causa). Baixamos aqui para reportar direito.
-      const res = await fetch(file.url, { signal: AbortSignal.timeout(60_000) });
+      //
+      // ★ `fetchGuardado` e nao `fetch`: esta URL vem do CLIENTE e o conteudo baixado
+      // vira mensagem de WhatsApp para o chatId que ele escolheu — ou seja, um canal
+      // de exfiltracao. Sem a guarda, `file.url=http://169.254.169.254/...` entrega as
+      // credenciais IAM da instancia no WhatsApp do atacante. Ver core/net-guard.ts.
+      const res = await fetchGuardado(file.url, { signal: AbortSignal.timeout(60_000) });
       if (!res.ok) {
         throw new Boom(`falha ao baixar file.url: HTTP ${res.status}`, { statusCode: 422 });
       }
@@ -251,7 +257,7 @@ export function registerSendRoutes(app: FastifyInstance, { sessions }: Deps): vo
     return {
       // `id` string: extractMsgId retorna direto (waha.js:18).
       id,
-      // _data espelha o shape desta API para consumidores que leem dali.
+      // _data espelha o shape do WAHA para consumidores que leem dali.
       _data: { id: { id: sent.key.id, _serialized: id }, Info: { ID: sent.key.id } },
       to: jid,
       timestamp: Math.floor(Date.now() / 1000),
@@ -891,7 +897,7 @@ export function registerSendRoutes(app: FastifyInstance, { sessions }: Deps): vo
   });
 
   // POST /api/reaction — reagir a uma mensagem (ou remover a reacao).
-  // Formato desta API: { session, messageId, reaction }. String vazia REMOVE a reacao,
+  // Formato do WAHA: { session, messageId, reaction }. String vazia REMOVE a reacao,
   // que e como o WhatsApp modela "desreagir" (nao ha endpoint de delete).
   app.post<{ Body: { session?: string; messageId?: string; chatId?: string; reaction?: string } }>(
     '/api/reaction',

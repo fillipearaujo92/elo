@@ -1,17 +1,19 @@
 // src/core/webhook.ts
 //
-// Emissor de webhooks. O consumidor e o endpoint HTTP configurado na sessao, que:
+// Emissor de webhooks no formato WAHA. O consumidor e POST /webhook/waha do backend
+// (sysled-chat-typescript/backend/webhooks/waha.js), que:
 //   1. exige `session` no corpo (401 sem isso);
-//   2. valida o header X-Webhook-Key (fail-closed: 401 sem ele);
-//   3. traduz o corpo para o seu modelo interno.
+//   2. exige o header X-Webhook-Key igual a waha.api_key (fail-closed 401);
+//   3. passa o corpo inteiro por translateWahaEvent().
 //
-// Entrega: retry com backoff. O consumidor deve responder 200 rapido e processar
-// async — mas pode estar reiniciando (deploy), e perder uma mensagem inbound e
-// inaceitavel. Default: 15 tentativas a cada 2s, configuravel por sessao.
+// Entrega: retry com backoff. O backend responde 200 rapido e processa async, mas
+// pode estar reiniciando (deploy) — perder uma mensagem inbound e inaceitavel, e o
+// WAHA real tambem faz retry (o driver configura retries: 15x/2s, ver waha.js:196).
 
 import type { Logger } from 'pino';
 import { events } from './events.js';
 import { inc } from './metrics.js';
+import { fetchGuardado } from './net-guard.js';
 
 export interface WebhookConfig {
   url: string;
@@ -29,10 +31,46 @@ export interface WahaEvent {
 const DEFAULT_ATTEMPTS = 15;
 const DEFAULT_DELAY_SECONDS = 2;
 
+/**
+ * URL segura para log e para o painel: sem credencial, sem query string.
+ *
+ * ★ Vazamento CONCRETO que isto corrige: os logs deste arquivo traziam a URL CRUA da
+ * config em quatro pontos. Webhook com token na query (`?token=abc`) ou com credencial
+ * embutida (`https://user:senha@host/hook`) — os dois padroes comuns — iam para o log
+ * em texto puro, e o log e o lugar menos protegido de uma instalacao: vai para
+ * arquivo, journald e qualquer coletor.
+ *
+ * Sanitizar na ORIGEM em vez de confiar no `redact` do pino: o redact depende de o
+ * path bater exatamente, e um `url` na raiz do objeto exigiria censurar `url`
+ * generico — o que apagaria tambem `req.url` do log de acesso e cegaria o
+ * diagnostico. Medido com pino real antes de decidir.
+ *
+ * Mantem origem e caminho, que e o que o operador precisa para saber QUAL webhook
+ * falhou. `[credencial]` explicito em vez de remover, para o log dizer que havia algo
+ * ali — campo que desaparece parece bug de instrumentacao.
+ */
+export function urlSegura(bruta: string): string {
+  try {
+    const u = new URL(bruta);
+    const cred = u.username || u.password ? '[credencial]@' : '';
+    const q = u.search ? '?[oculto]' : '';
+    return `${u.protocol}//${cred}${u.host}${u.pathname}${q}`;
+  } catch {
+    // URL invalida nao deve aparecer no log de forma alguma: se nao consigo parsear,
+    // nao consigo garantir que nao ha segredo dentro.
+    return '[url invalida]';
+  }
+}
+
 export class WebhookEmitter {
   constructor(
     private readonly log: Logger,
-    private readonly fetchFn: typeof fetch = fetch,
+    // ★ Default `fetchGuardado`, nao `fetch`: a URL do webhook vem da config da
+    // sessao, ou seja, do cliente da API. Sem a guarda, configurar um webhook para
+    // `http://169.254.169.254/...` fazia o gateway bater na metadata da instancia a
+    // cada mensagem recebida — e o retry (15 tentativas) transformava isso num
+    // scanner persistente. Os testes injetam o proprio fake e nao passam por aqui.
+    private readonly fetchFn: typeof fetch = fetchGuardado,
     private readonly sleepFn: (ms: number) => Promise<void> = (ms) =>
       new Promise((r) => setTimeout(r, ms)),
   ) {}
@@ -50,7 +88,7 @@ export class WebhookEmitter {
     );
   }
 
-  // events ausente/vazio = assina TODOS. Um cliente bem-comportado
+  // events ausente/vazio = assina TODOS (comportamento do WAHA). O driver do backend
   // sempre manda ['message','message.ack','session.status'] explicitamente.
   private subscribes(w: WebhookConfig, event: string): boolean {
     if (!w.events?.length) return true;
@@ -64,7 +102,7 @@ export class WebhookEmitter {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     // customHeaders e o mecanismo pelo qual o backend recebe X-Webhook-Key. Sem
     // isso, TODA mensagem inbound toma 401 e desaparece silenciosamente — bug ja
-    // vivido em producao: sem o header, TODA mensagem inbound tomava 401.
+    // vivido em producao com o WAHA (documentado em waha.js:188-191).
     for (const h of w.customHeaders ?? []) {
       if (h?.name) headers[h.name] = h.value ?? '';
     }
@@ -95,14 +133,14 @@ export class WebhookEmitter {
         // enfileira lixo. 401 aqui quase sempre significa customHeaders errado.
         if (res.status >= 400 && res.status < 500 && res.status !== 429) {
           this.log.error(
-            { event: event.event, session: event.session, status: res.status, url: w.url },
+            { event: event.event, session: event.session, status: res.status, url: urlSegura(w.url) },
             'webhook rejeitado com erro de cliente; nao vou retentar',
           );
           inc('webhook_rejected_total', event.session);
           events.emit(
             'webhook', event.session,
             `Webhook REJEITADO (HTTP ${res.status}) — evento perdido`,
-            { evento: event.event, url: w.url, dica: res.status === 401 ? 'chave do webhook nao casa' : undefined },
+            { evento: event.event, url: urlSegura(w.url), dica: res.status === 401 ? 'chave do webhook nao casa' : undefined },
             'error',
           );
           return;
@@ -122,7 +160,7 @@ export class WebhookEmitter {
     }
 
     this.log.error(
-      { event: event.event, session: event.session, url: w.url, attempts },
+      { event: event.event, session: event.session, url: urlSegura(w.url), attempts },
       'webhook esgotou tentativas; evento PERDIDO',
     );
     // ★ Evento PERDIDO: mensagem que chegou do WhatsApp e nunca alcancou o
@@ -132,7 +170,7 @@ export class WebhookEmitter {
     events.emit(
       'webhook', event.session,
       `Webhook falhou ${attempts}x — evento PERDIDO`,
-      { evento: event.event, url: w.url }, 'error',
+      { evento: event.event, url: urlSegura(w.url) }, 'error',
     );
   }
 }
