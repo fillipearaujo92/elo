@@ -1731,7 +1731,15 @@ export class SessionManager {
     // ★ A guarda que faltava. Ver o comentário do método: sem ela, o recibo da NOSSA
     // leitura de mensagem recebida virava linha em `sent_messages` e webhook de ack de
     // uma mensagem que o consumidor nunca enviou.
-    if (!key?.fromMe) return;
+    if (!key?.fromMe) {
+      // Log em debug para diagnosticar ACK que "não chega": se um recibo de mensagem
+      // NOSSA aparecer aqui, a guarda está descartando o que deveria passar.
+      this.log.debug(
+        { session: live.name, rawId, chatId, ack },
+        'ack descartado: fromMe=false (recibo de mensagem recebida)',
+      );
+      return;
+    }
 
     // ★ O msgId do ACK precisa ser IDÊNTICO ao devolvido no envio, senão o backend
     // não casa a mensagem e ela fica presa em 'sent' (um tique) para sempre.
