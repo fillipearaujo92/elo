@@ -86,7 +86,22 @@ Depois de conectar, use **testar canal** no detalhe da sessão: ele envia uma me
 e mostra a entrega progredindo (aceita → enviada → entregue → lida). É a diferença
 entre saber que o socket subiu e saber que a mensagem *chega*.
 
-> Se o gateway precisa ser alcançado por outra máquina, defina `PUBLIC_URL` no `.env` com o endereço real (ex.: `http://192.168.1.50:3000`). Ele entra nos links de mídia enviados nos webhooks.
+> **A porta escuta em `127.0.0.1` por padrão** — o gateway não é alcançável por outras
+> máquinas até você permitir. A chave de API dá poder de enviar mensagem em nome do
+> número pareado, então expor é uma decisão, não um padrão.
+>
+> Para alcançar de outra máquina, defina os dois no `.env`:
+>
+> ```bash
+> BIND_ADDR=0.0.0.0
+> PUBLIC_URL=http://192.168.1.50:3000
+> ```
+>
+> O `PUBLIC_URL` entra nos links de mídia enviados nos webhooks — com o padrão
+> (`localhost`), o seu sistema tentaria baixar de si mesmo.
+>
+> Antes de expor na internet, ponha um proxy reverso com TLS na frente. Leia o
+> [SECURITY.md](SECURITY.md).
 
 ### Sem Docker
 

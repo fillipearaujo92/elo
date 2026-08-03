@@ -55,7 +55,14 @@ export type CounterName =
    * Serve para responder "a purga está rodando?" — antes ela não existia, e a
    * retenção de 7 dias era documentação de comportamento inexistente.
    */
-  | 'sent_messages_purged_total';
+  | 'sent_messages_purged_total'
+  /** Streams SSE de diagnostico rejeitados por teto simultaneo. Contador GLOBAL ('*'). */
+  | 'sse_rejected_total'
+  /**
+   * Resolucoes de midia que TIVERAM DE ESPERAR vaga no semaforo. Contador GLOBAL.
+   * Valor subindo = o teto de concorrencia esta apertado para o volume real.
+   */
+  | 'media_queued_total';
 
 const HELP: Record<CounterName, string> = {
   inbound_total: 'Mensagens recebidas e repassadas',
@@ -74,6 +81,8 @@ const HELP: Record<CounterName, string> = {
   reconnect_total: 'Reconexoes iniciadas',
   qr_total: 'QR codes gerados',
   sent_messages_purged_total: 'Linhas de sent_messages apagadas pela limpeza (retencao)',
+  sse_rejected_total: 'Streams de diagnostico rejeitados por teto de conexoes simultaneas',
+  media_queued_total: 'Resolucoes de midia que esperaram vaga (teto de concorrencia)',
 };
 
 /** contador -> sessão -> valor. */

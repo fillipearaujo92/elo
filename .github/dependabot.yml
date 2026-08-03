@@ -1,0 +1,41 @@
+# Dependabot — atualizacao de dependencia com PR automatico.
+#
+# Por que existe: `npm audit` no CI so avisa quando ALGUEM abre um PR. Sem Dependabot,
+# uma falha publicada numa transitiva fica no repo ate o proximo commit qualquer — e num
+# gateway que fala protocolo Signal e guarda chaves de sessao de WhatsApp, essa janela
+# importa mais que numa aplicacao comum.
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    # Agrupa patch e minor num PR so: cinco PRs por semana de bump de patch e o tipo de
+    # ruido que faz a equipe parar de olhar. Major vem separado, porque exige leitura.
+    groups:
+      producao:
+        applies-to: version-updates
+        dependency-type: production
+        update-types: [minor, patch]
+      desenvolvimento:
+        applies-to: version-updates
+        dependency-type: development
+        update-types: [minor, patch]
+    ignore:
+      # ★ baileys fica FORA do bump automatico. E a peca que fala o protocolo, esta em
+      # release candidate, e um default que muda entre RCs ja trouxe de volta o "Bad MAC"
+      # (perda de mensagem inbound) neste projeto. Atualizacao dela e decisao manual,
+      # com teste E2E de recebimento depois. Ver o comentario em session-manager.ts
+      # sobre enableAutoSessionRecreation.
+      - dependency-name: baileys
+    labels: [dependencias]
+
+  # As actions tambem envelhecem — e uma action comprometida roda com o token do CI.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    labels: [dependencias, ci]

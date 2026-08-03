@@ -97,10 +97,22 @@ Once connected, use **test channel** in the session detail: it sends a message a
 shows delivery progressing (accepted → sent → delivered → read). That is the
 difference between knowing the socket came up and knowing messages *arrive*.
 
-> If the gateway must be reachable from another machine, set `PUBLIC_URL` in
-> `.env` to the real address (e.g. `http://192.168.1.50:3000`). It goes into the
-> media links sent on webhooks — with the default (`localhost`), your system would
-> try to download from itself.
+> **The port binds to `127.0.0.1` by default** — the gateway is not reachable from
+> other machines until you say so. The API key grants the power to send messages as
+> the paired number, so exposing it is a decision, not a default.
+>
+> To reach it from another machine, set both in `.env`:
+>
+> ```bash
+> BIND_ADDR=0.0.0.0
+> PUBLIC_URL=http://192.168.1.50:3000
+> ```
+>
+> `PUBLIC_URL` goes into the media links sent on webhooks — with the default
+> (`localhost`), your system would try to download from itself.
+>
+> Put a reverse proxy with TLS in front of it before exposing it to the internet.
+> Check [SECURITY.md](SECURITY.md) first.
 
 ### Without Docker
 

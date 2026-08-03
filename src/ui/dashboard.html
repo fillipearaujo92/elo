@@ -575,6 +575,27 @@ const ST={
 const st=s=>ST[s]||ST.STOPPED
 
 /**
+ * Rótulo do estado, considerando se o gateway DESISTIU de reconectar.
+ *
+ * ★ O painel mostrava "com falha" tanto para a sessão que está reconectando sozinha
+ * quanto para a que esgotou as tentativas e só volta com /restart humano. São estados
+ * OPOSTOS em termos do que o operador deve fazer — um se resolve sozinho, o outro
+ * exige ação — e tinham aparência idêntica. O resultado é o operador esperar por algo
+ * que não vem, ou intervir sem necessidade.
+ *
+ * O backend já distinguia os dois casos (três caminhos de queda, mais um estado
+ * terminal); só não expunha isso em campo consultável.
+ */
+function estado(s){
+  const base=st(s.status)
+  if(s.status!=='FAILED')return base
+  return s.gaveUp
+    ? {...base,l:'precisa reiniciar',t:'O gateway tentou reconectar e desistiu. Clique em reiniciar.'}
+    : {...base,l:s.reconnectAttempts?`reconectando ${s.reconnectAttempts}/10`:'reconectando',
+       t:'A conexão caiu e o gateway está tentando voltar sozinho.'}
+}
+
+/**
  * Pinta o SEGUNDO elo da marca com a cor do pior estado presente.
  *
  * Falha ganha de "aguardando QR": um canal com falha não volta sozinho, e o QR
@@ -821,7 +842,7 @@ function rows(){
 }
 
 function row(s,n){
-  const a=st(s.status), on=s.status==='WORKING'
+  const a=estado(s), on=s.status==='WORKING'
   const k=stats[s.name]||{sent:0,lids:0}
   const nm=s.label||s.name
   const slug=s.label&&s.label!==s.name?s.name:''
@@ -832,7 +853,7 @@ function row(s,n){
    <div class="rw-n"><b title="${esc(nm)}">${esc(nm)}</b>${
      slug||extra?`<i>${esc(slug)}${esc(extra)}</i>`:''}</div>
    <div class="rw-p${ph?'':' no'}">${ph?esc(ph):'—'}</div>
-   <div class="rw-s ${a.k}">${a.l}</div>
+   <div class="rw-s ${a.k}"${a.t?` title="${esc(a.t)}"`:''}>${a.l}</div>
    <div class="rw-m">${nf(k.sent)}<em> / ${nf(k.lids)}</em></div>
    <div class="rw-b">
      ${on?`<button data-a="stop" title="Parar" aria-label="Parar">${AI.stop}</button>`
@@ -1003,9 +1024,41 @@ async function carregarBackup(){
 }
 
 // ── Ações ──────────────────────────────────────────────────────────────────
+/**
+ * Ações que derrubam o canal pedem confirmação.
+ *
+ * ★ `stop` e `restart` executavam DIRETO no clique, em botão de 29px ao lado do de
+ * remover. Parar um canal de atendimento em produção era um clique errado, sem rede
+ * de proteção — enquanto `del` já confirmava. A inconsistência mostra que a lacuna
+ * não era intencional.
+ *
+ * `start` não confirma: subir um canal não interrompe nada.
+ */
+const CONFIRMA={
+  stop:{t:'parar sessão',b:'parar',
+        m:'O canal fica FORA DO AR: para de receber e de enviar mensagem até ser iniciado de novo. O pareamento é preservado.'},
+  restart:{t:'reiniciar sessão',b:'reiniciar',
+        m:'A conexão cai e volta. Por alguns segundos o canal não recebe nem envia. O pareamento é preservado.'},
+}
+function confirmar(cfg,onSim){
+  const o=modal(`<div class="md-h"><b>${cfg.t}</b><div class="sp"></div></div>
+   <div class="md-b"><p style="font-size:13px;margin:0 0 12px">${esc(cfg.nome)}</p>
+   <p class="fd-h" style="margin:0">${cfg.m}</p></div>
+   <div class="md-a"><button id="n">cancelar</button><div class="sp"></div>
+   <button id="y" class="d">${cfg.b}</button></div>`)
+  o.querySelector('#n').onclick=()=>o.remove()
+  o.querySelector('#y').onclick=()=>{o.remove();onSim()}
+}
+
 async function act(a,name,btn){
   if(a==='qr')return qr(name)
   if(a==='del')return del(name)
+  // Confirma antes de derrubar o canal. O clique só chega ao servidor depois do "sim".
+  if(CONFIRMA[a]&&!act._ok){
+    return confirmar({...CONFIRMA[a],nome:nomeDe(name)},()=>{
+      act._ok=true; act(a,name,btn).finally(()=>{act._ok=false})
+    })
+  }
   const lb={start:'iniciada',restart:'reiniciada',stop:'parada'}
   const old=btn?btn.innerHTML:null
   if(btn){btn.disabled=true;btn.innerHTML='<span class="spn"></span>'}
@@ -1320,10 +1373,14 @@ function settings(name){
        </div>
        <div class="fd">
          <label for="cky">chave de autenticação</label>
-         <input id="cky" type="password" placeholder="${masked?'•••••••• (mantém a atual)':'usa a chave do gateway'}"
+         <input id="cky" type="password" placeholder="${masked?'•••••••• (mantém a atual)':'gere uma chave própria'}"
            autocomplete="new-password">
          <p class="fd-h">Vai no header <span style="color:var(--t2)">X-Webhook-Key</span>.
            Em branco, mantém a que já está gravada.</p>
+         ${s.webhookUsesMasterKey?`<p class="fd-h" style="color:var(--amb);margin-top:6px">
+           Esta sessão autentica o webhook com a <b>chave do gateway</b> — a mesma que
+           cria sessão, lê QR e baixa o backup. Quem recebe o webhook fica com controle
+           total. <button type="button" id="ckg">gerar chave só para isto</button></p>`:''}
        </div>
        <div class="fd">
          <label>reentrega em caso de falha</label>
@@ -1386,6 +1443,21 @@ function settings(name){
   o.querySelector('#cha').onclick=()=>{
     hd.insertAdjacentHTML('beforeend',hdrRow('',''))
     const r=hd.lastElementChild; wire(r); r.querySelector('input').focus()
+  }
+
+  // "gerar chave só para isto": preenche o campo com uma chave aleatória. Só aparece
+  // quando a sessão ainda usa a chave mestra do gateway para autenticar o webhook.
+  //
+  // Gera no NAVEGADOR e mostra em claro de propósito: o operador precisa copiar o
+  // valor para configurar o lado que RECEBE o webhook. Uma chave gerada no servidor
+  // voltaria mascarada, e ele não teria como saber qual configurar lá.
+  const bkg=o.querySelector('#ckg')
+  if(bkg)bkg.onclick=()=>{
+    const b=new Uint8Array(32); crypto.getRandomValues(b)
+    const k=[...b].map(x=>x.toString(16).padStart(2,'0')).join('')
+    const inp=o.querySelector('#cky')
+    inp.type='text'; inp.value=k; inp.focus(); inp.select()
+    toast('ok','chave gerada','copie e configure no destino do webhook')
   }
 
   o.querySelector('#cs').onclick=async()=>{
@@ -1623,7 +1695,7 @@ function detail(name){
   const s=sess.find(x=>x.name===name); if(!s)return
   const k=stats[name]||{sent:0,lids:0}
   const wh=s.config?.webhooks?.[0]
-  const a=st(s.status)
+  const a=estado(s)
   const ph=s.me?.id?String(s.me.id).split('@')[0]:null
   const fmt=d=>d?new Date(d).toLocaleString('pt-BR'):'—'
   const nm=s.label||s.name

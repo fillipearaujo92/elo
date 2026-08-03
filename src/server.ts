@@ -16,7 +16,7 @@ import { registerContactRoutes } from './routes/contacts.js';
 import { registerSendRoutes } from './routes/send.js';
 import { registerPresenceRoutes } from './routes/presence.js';
 import { registerSessionRoutes } from './routes/sessions.js';
-import { renderPrometheus } from './core/metrics.js';
+import { inc, renderPrometheus } from './core/metrics.js';
 import { backupStatus, dumpAuth, restoreAuth, setMark } from './core/backup.js';
 import { startJanitor } from './core/janitor.js';
 import { isAuthorized, isPublicPath } from './core/access.js';
@@ -274,7 +274,34 @@ for (const path of ['/', '/dashboard']) {
 // `docker logs`: mensagem entrando, ACK progredindo, LID resolvido, webhook
 // rejeitado. SSE em vez de WebSocket porque o fluxo é unidirecional e o
 // EventSource do navegador reconecta sozinho.
+/**
+ * Streams SSE abertos agora. Teto porque cada um e uma closure inscrita no barramento,
+ * ITERADA a cada mensagem e a cada ack de TODAS as sessoes.
+ *
+ * ★ Nao havia limite. Com uma chave valida, abrir N streams degrada o processamento de
+ * todas as sessoes WhatsApp do gateway — o dano nao e no diagnostico, e na entrega de
+ * mensagem. E o painel reconecta a cada 3s, entao um cliente com problema de rede
+ * acumulava rapido.
+ *
+ * O teto e generoso: um operador com o painel aberto em duas abas e dois navegadores
+ * usa 4. Passar de 20 nao e uso legitimo.
+ */
+let streamsAbertos = 0;
+const MAX_STREAMS_SSE = 20;
+
 app.get<{ Querystring: { after?: string } }>('/api/events', async (req, reply) => {
+  if (streamsAbertos >= MAX_STREAMS_SSE) {
+    inc('sse_rejected_total', '*');
+    // 503 e nao 429: o limite nao e de TAXA (abrir e fechar rapido esta ok), e de
+    // recurso simultaneo. `Retry-After` para o painel nao entrar em loop apertado.
+    return reply.code(503).header('Retry-After', '10').send({
+      code: 'too_many_streams',
+      message: `limite de ${MAX_STREAMS_SSE} streams de diagnostico simultaneos atingido`,
+      hint: 'feche abas do painel que ficaram abertas; o stream fecha sozinho ao sair da pagina',
+    });
+  }
+  streamsAbertos += 1;
+
   reply.raw.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
@@ -301,6 +328,11 @@ app.get<{ Querystring: { after?: string } }>('/api/events', async (req, reply) =
     encerrado = true;
     if (beat) clearInterval(beat);
     unsubscribe();
+    // Decrementa AQUI, no encerramento idempotente: o contador segue exatamente o
+    // ciclo de vida do listener. Decrementar no 'close' do request repetiria o bug
+    // que o `encerrar()` existe para corrigir — conexao que morre sem emitir 'close'
+    // vazaria a vaga, e o teto se esgotaria sozinho com o tempo.
+    streamsAbertos -= 1;
   };
 
   const send = (ev: unknown) => {

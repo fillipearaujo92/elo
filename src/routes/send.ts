@@ -58,6 +58,65 @@ const MAX_MEDIA_ITEMS = 30;
 const MAX_MEDIA_TOTAL_BYTES = 128 * 1024 * 1024;
 
 /**
+ * Quantas resolucoes de midia podem estar em voo AO MESMO TEMPO, no gateway inteiro.
+ *
+ * ★ Os dois tetos acima protegem UM request. Nada limitava quantos requests
+ * concorrentes existem — e 128MB x N requests autenticados = OOM. O dano nao fica no
+ * envio que estourou: o container morre e leva TODAS as sessoes WhatsApp com ele. Um
+ * envio que espera na fila e incomodo; o gateway inteiro cair e incidente.
+ *
+ * 4 e deliberadamente baixo. Resolucao de midia e I/O de rede seguido de um buffer
+ * grande no heap: o gargalo real e memoria, nao CPU, e serializar aqui custa latencia
+ * mas nao throughput (o WhatsApp serializa o envio de qualquer forma).
+ */
+const MAX_MIDIA_CONCORRENTE = 4;
+
+/** Espera de vaga no semaforo, em ms, antes de desistir com 503. */
+const ESPERA_VAGA_MS = 30_000;
+
+let midiaEmVoo = 0;
+const filaMidia: Array<() => void> = [];
+
+/**
+ * Semaforo simples. Sem dependencia nova: uma fila de callbacks e o suficiente para
+ * um processo unico, e adicionar uma lib para isto seria trocar 20 linhas legiveis por
+ * uma dependencia a auditar.
+ */
+async function comVagaDeMidia<T>(fn: () => Promise<T>): Promise<T> {
+  if (midiaEmVoo >= MAX_MIDIA_CONCORRENTE) {
+    inc('media_queued_total', '*');
+    await new Promise<void>((resolve, reject) => {
+      // Timeout na ESPERA: sem ele, um pico de requests deixaria clientes pendurados
+      // ate o timeout deles (ou para sempre), e o operador veria "lentidao" sem causa.
+      const t = setTimeout(() => {
+        const i = filaMidia.indexOf(liberar);
+        if (i >= 0) filaMidia.splice(i, 1);
+        reject(
+          new Boom('gateway ocupado processando midia; tente novamente', {
+            statusCode: 503,
+            data: { code: 'media_busy' },
+          }),
+        );
+      }, ESPERA_VAGA_MS);
+      function liberar(): void {
+        clearTimeout(t);
+        resolve();
+      }
+      filaMidia.push(liberar);
+    });
+  }
+  midiaEmVoo += 1;
+  try {
+    return await fn();
+  } finally {
+    midiaEmVoo -= 1;
+    // Libera o proximo da fila. `shift` mantem FIFO: quem esperou mais entra primeiro,
+    // senao um pico constante deixaria alguem esperando indefinidamente.
+    filaMidia.shift()?.();
+  }
+}
+
+/**
  * Lê o corpo da resposta contando bytes e abortando ao passar do teto.
  *
  * `content-length` pode faltar (chunked) ou mentir, então não dá para confiar só
@@ -153,14 +212,31 @@ export function registerSendRoutes(app: FastifyInstance, { sessions }: Deps): vo
     return { session, jid: toBaileysJid(chatId) };
   }
 
-  /** Baixa/decodifica o arquivo do payload para Buffer, ou devolve a url para o Baileys. */
+  /**
+   * Baixa/decodifica o arquivo do payload para Buffer, ou devolve a url para o Baileys.
+   *
+   * ★ Passa pelo semaforo: e o gargalo COMUM a todos os envios de midia (sendImage,
+   * sendVideo, sendFile, sendVoice, sendSticker e cada item de sendMedia). Limitar aqui,
+   * num ponto so, cobre todos os caminhos — e nenhum chamador pode esquecer.
+   */
   async function resolveFile(file: FilePayload | undefined): Promise<{
     buffer?: Buffer;
     url?: string;
     mimetype: string | undefined;
     filename: string | undefined;
   }> {
+    // A validacao barata roda FORA do semaforo: rejeitar payload invalido nao consome
+    // memoria e nao deve esperar por vaga.
     if (!file) throw new Boom('file e obrigatorio', { statusCode: 400 });
+    return comVagaDeMidia(() => resolveFileInterno(file));
+  }
+
+  async function resolveFileInterno(file: FilePayload): Promise<{
+    buffer?: Buffer;
+    url?: string;
+    mimetype: string | undefined;
+    filename: string | undefined;
+  }> {
     if (file.data) {
       // ★ `[^,]*` e NAO `[^;]+`: o mimetype pode trazer PARAMETRO antes do
       // `;base64,` — e justamente o caso do voice note, cujo formato canonico e

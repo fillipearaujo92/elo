@@ -44,6 +44,20 @@ jobs:
       - name: Testes
         run: npm test
 
+      # ★ Vulnerabilidade conhecida em dependencia nao passava por nenhum portao. O
+      # gateway fala protocolo Signal e guarda as chaves de sessoes de WhatsApp: uma
+      # falha em transitiva aqui vale muito mais que numa aplicacao comum.
+      #
+      # `high` e nao `moderate`: com 179 pacotes, alertar em moderate produz ruido que
+      # treina a equipe a ignorar o passo — e portao ignorado nao e portao. Moderate
+      # ainda aparece no relatorio, sem falhar o build.
+      - name: Auditoria de dependencias
+        run: npm audit --audit-level=high
+
+      - name: Auditoria completa (informativa, nao falha)
+        if: always()
+        run: npm audit || true
+
       # O painel é HTML/CSS/JS inline, sem build — nada o valida automaticamente.
       # Este passo pega erro de sintaxe no JS antes de ir para produção, que é o
       # tipo de quebra que só apareceria quando alguém abrisse a página.

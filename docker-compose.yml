@@ -38,7 +38,15 @@ services:
       LOG_LEVEL: "${LOG_LEVEL:-info}"
       MEDIA_DIR: /data/media
     ports:
-      - "${PORT:-3000}:3000"
+      # ★ Escuta em 127.0.0.1 por padrão, NÃO em todas as interfaces.
+      #
+      # Antes era "${PORT:-3000}:3000", que numa VPS sem firewall publica o gateway na
+      # internet — e a chave de API dá poder de enviar mensagem em nome do número
+      # pareado. O padrão precisa ser o seguro: quem quer expor faz uma escolha.
+      #
+      # Para abrir (atrás de um proxy com TLS, que é o recomendado), defina
+      # BIND_ADDR=0.0.0.0 no .env. Ver a nota de exposição no README.
+      - "${BIND_ADDR:-127.0.0.1}:${PORT:-3000}:3000"
     volumes:
       # Cache de mídia em trânsito. Pode ser descartado; o consumidor dos webhooks
       # é a fonte da verdade dos arquivos.

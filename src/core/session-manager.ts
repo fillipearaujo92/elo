@@ -3,20 +3,21 @@
 // Dono dos sockets Baileys: um socket por sessao, N sessoes no mesmo processo.
 // Responsavel por criar/parar/apagar sessoes, restaurar no boot e reconectar.
 //
-// Regras de resiliencia (as que mais custaram em producao):
+// Regras de resiliencia (as que mais custaram em producao com Evolution/WAHA):
 //
 //  1. LOGOUT vs QUEDA TRANSIENTE. Em logout (401/403/411) as creds viraram lixo:
 //     limpamos o auth state, zeramos me_id e vamos para SCAN_QR_CODE. Em queda
 //     transiente reconectamos com backoff PRESERVANDO me_id — e assim que o backend
-//     do consumidor distingue "reconecta sozinho" de "chama um humano".
+//     (waha-reconnect.js) distingue "reconecta sozinho" de "chama um humano".
 //
 //  2. restartRequired (515) e reconexao IMEDIATA, sem backoff e sem contar tentativa.
 //     Acontece sempre depois do primeiro QR; tratar como falha impede o pareamento.
 //
-//  3. session.status com THROTTLE. O refresh de QR gera um evento a cada ciclo
+//  3. session.status com THROTTLE. O WAHA real emite um evento a cada refresh de QR
 //     (~20s) e isso virou tempestade no backend. Suprimimos repeticao do MESMO status
 //     dentro da janela; mudanca de status passa sempre.
 
+import { randomBytes } from 'node:crypto';
 import { Boom } from '@hapi/boom';
 import {
   BufferJSON,
@@ -51,6 +52,7 @@ import {
   type WahaSessionStatus,
 } from './waha-compat.js';
 import type { WebhookConfig, WebhookEmitter } from './webhook.js';
+import { urlSegura } from './webhook.js';
 
 export interface SessionConfig {
   webhooks?: WebhookConfig[];
@@ -137,6 +139,15 @@ function maskSecrets(config: SessionConfig): SessionConfig {
     ...config,
     webhooks: webhooks.map((w) => ({
       ...w,
+      // ★ A URL tambem e segredo em potencial. Webhook autenticado por token na query
+      // (`https://host/hook?token=abc`) ou com credencial embutida
+      // (`https://user:senha@host/hook`) sao padroes comuns, e o GET /api/sessions
+      // devolvia a URL CRUA — para o painel, e para o DevTools de quem abrisse a tela.
+      //
+      // `urlSegura` preserva origem e caminho (o operador precisa saber QUAL webhook
+      // esta configurado) e oculta so a query e a credencial. Mesma funcao usada no
+      // log, para nao existirem duas nocoes de "url segura" divergindo com o tempo.
+      url: w.url ? urlSegura(w.url) : w.url,
       customHeaders: w.customHeaders?.map((h) => ({
         name: h.name,
         value: h.value ? MASK : '',
@@ -162,8 +173,17 @@ function unmaskConfig(entrada: SessionConfig, atual?: SessionConfig): SessionCon
   return {
     ...entrada,
     webhooks: webhooks.map((w, i) => {
-      if (!w?.customHeaders?.length) return w;
-      const antes = atual?.webhooks?.[i]?.customHeaders;
+      const anterior = atual?.webhooks?.[i];
+      // ★ A URL mascarada tem o MESMO problema de read-modify-write que os headers:
+      // quem faz GET -> editar -> gravar devolveria `https://host/hook?[oculto]` de
+      // boa-fe, e o gateway passaria a chamar uma URL com `[oculto]` literal na query —
+      // webhook quebrado silenciosamente. Se a entrada traz a marca de ocultacao,
+      // restauramos a URL real do banco.
+      const url = w?.url?.includes('[oculto]') || w?.url?.includes('[credencial]')
+        ? anterior?.url ?? w.url
+        : w?.url;
+      if (!w?.customHeaders?.length) return url === w?.url ? w : { ...w, url };
+      const antes = anterior?.customHeaders;
       const headers = w.customHeaders
         .map((h) => {
           if (h?.value !== MASK) return h;
@@ -171,9 +191,76 @@ function unmaskConfig(entrada: SessionConfig, atual?: SessionConfig): SessionCon
           return real && real !== MASK ? { name: h.name, value: real } : null;
         })
         .filter((h): h is { name: string; value: string } => h !== null);
-      return { ...w, customHeaders: headers };
+      return { ...w, url, customHeaders: headers };
     }),
   };
+}
+
+/** Nome do header que autentica o gateway junto do consumidor do webhook. */
+const HEADER_CHAVE_WEBHOOK = 'X-Webhook-Key';
+
+/**
+ * Garante que a sessao tenha uma chave de webhook PROPRIA, nao a chave mestra.
+ *
+ * ── O problema que isto corrige ────────────────────────────────────────────
+ * O `X-Webhook-Key` caia para `config.apiKey` quando ninguem informava um valor. A
+ * `apiKey` e a credencial de TUDO: criar e apagar sessao, ler QR, enviar mensagem em
+ * nome do numero, e baixar o backup com as chaves Signal.
+ *
+ * Entao configurar um webhook — operacao rotineira — entregava controle total do
+ * gateway ao destino do webhook. E o destino nem precisava ser malicioso: basta o log
+ * dele registrar os headers recebidos, o que a maioria dos frameworks faz por default.
+ *
+ * ── Por que so em sessao nova ──────────────────────────────────────────────
+ * Trocar a chave de uma sessao existente quebraria a entrega: o consumidor compara o
+ * header com o que ELE tem configurado, e passaria a responder 401 ate os dois lados
+ * serem atualizados juntos. Como o proposito aqui e fechar o default e nao causar
+ * incidente, sessao existente segue como esta — e o painel avisa quais ainda usam a
+ * chave mestra.
+ *
+ * 32 bytes hex: mesmo tamanho que o `.env.example` recomenda para a `API_KEY`.
+ */
+function garantirChaveWebhook(cfg: SessionConfig, ehNova: boolean): SessionConfig {
+  if (!ehNova || !Array.isArray(cfg.webhooks) || !cfg.webhooks.length) return cfg;
+  return {
+    ...cfg,
+    webhooks: cfg.webhooks.map((w) => {
+      if (!w?.url) return w;
+      const headers = w.customHeaders ?? [];
+      const jaTem = headers.some(
+        (h) => h?.name?.toLowerCase() === HEADER_CHAVE_WEBHOOK.toLowerCase() && h.value,
+      );
+      // Quem informou a propria chave manda: nao sobrescrevemos escolha explicita.
+      if (jaTem) return w;
+      return {
+        ...w,
+        customHeaders: [
+          ...headers,
+          { name: HEADER_CHAVE_WEBHOOK, value: randomBytes(32).toString('hex') },
+        ],
+      };
+    }),
+  };
+}
+
+/**
+ * A sessao ainda depende da chave MESTRA para autenticar o webhook?
+ *
+ * Serve ao aviso no painel. `true` quando ha webhook configurado e o `X-Webhook-Key`
+ * esta ausente (cai para a apiKey) ou e igual a ela.
+ */
+export function usaChaveMestraNoWebhook(cfg: SessionConfig | undefined, apiKey: string): boolean {
+  const webhooks = cfg?.webhooks;
+  if (!Array.isArray(webhooks) || !webhooks.length) return false;
+  return webhooks.some((w) => {
+    if (!w?.url) return false;
+    const h = w.customHeaders?.find(
+      (x) => x?.name?.toLowerCase() === HEADER_CHAVE_WEBHOOK.toLowerCase(),
+    );
+    // Sem header: o emissor cai para a apiKey. Com header igual a apiKey: mesma coisa,
+    // so explicito.
+    return !h?.value || h.value === apiKey;
+  });
 }
 
 interface LiveSession {
@@ -189,6 +276,14 @@ interface LiveSession {
   config: SessionConfig;
   reconnectAttempts: number;
   reconnectTimer: NodeJS.Timeout | null;
+  /**
+   * Desistiu de reconectar sozinho: so volta com /restart (acao humana).
+   *
+   * Distinto de FAILED "esta tentando". Sem este campo o painel mostrava o MESMO
+   * rotulo para os dois, e sao estados opostos em termos de o que o operador deve
+   * fazer. Zera junto com reconnectAttempts quando a conexao volta.
+   */
+  gaveUp: boolean;
   /** Ultimo status emitido + quando, para o throttle de session.status. */
   lastEmittedStatus: WahaSessionStatus | null;
   lastEmittedAt: number;
@@ -299,9 +394,19 @@ export class SessionManager {
     // Desmascara também aqui: o ON CONFLICT torna este um caminho de ATUALIZAÇÃO,
     // e o driver reaplica o config por aqui depois de receber 422 "já existe".
     const atual = await this.getSessionRow(name);
-    const cfgLimpo = unmaskConfig(cfg ?? {}, atual?.config);
+    // ★ Sessao NOVA (nao existe no banco) ganha chave de webhook PROPRIA.
+    //
+    // O default era cair para `config.apiKey` — a chave MESTRA do gateway. Ou seja:
+    // apontar um webhook para qualquer destino entregava a credencial de controle
+    // total de TODAS as sessoes a esse destino. Quem recebe webhook nao precisa poder
+    // criar sessao, ler QR nem baixar o backup com as chaves Signal.
+    //
+    // So para sessoes NOVAS, por decisao: gerar para as existentes as quebraria — o
+    // consumidor valida a chave contra o que ele tem configurado, e o webhook passaria
+    // a tomar 401 ate os dois lados serem atualizados juntos.
+    const cfgLimpo = garantirChaveWebhook(unmaskConfig(cfg ?? {}, atual?.config), !atual);
     const res = await this.pool.query<SessionRow>(
-      // COALESCE no label: um upsert sem label (o caso de um cliente que
+      // COALESCE no label: um upsert sem label (o caso do backend do Sysled, que
       // só manda o identifier) não apaga o rótulo que o operador já escolheu.
       `INSERT INTO wa_gateway.sessions (name, label, config, should_start, status)
        VALUES ($1, COALESCE($4, $1), $2::jsonb, $3, 'STOPPED')
@@ -571,6 +676,7 @@ export class SessionManager {
       config: row.config ?? {},
       reconnectAttempts: 0,
       reconnectTimer: null,
+      gaveUp: false,
       lastEmittedStatus: null,
       lastEmittedAt: 0,
       stopping: false,
@@ -640,7 +746,7 @@ export class SessionManager {
   // ── Estado observavel (o que o driver do backend le) ─────────────────────
 
   /**
-   * Shape que o consumidor le para saber o estado da sessao:
+   * Shape consumido por connectionState() em wa-provider/waha.js:106-119:
    *   status, me.id, engine.engine, e a presenca de me decide hasMe.
    */
   async describe(name: string): Promise<Record<string, unknown> | null> {
@@ -667,15 +773,21 @@ export class SessionManager {
         ? { id: `${meId}@c.us`, pushName: live?.mePushName ?? row.me_push_name ?? null }
         : null,
       // O driver le engine.engine apenas para exibir/monitorar. Reportamos o nome
-      // do nosso engine em vez de fingir ser outro.
+      // do nosso engine em vez de fingir ser WEBJS/GOWS.
       engine: { engine: 'BAILEYS' },
 
       // ── Campos extras para o painel de operacao ──────────────────────────
-      // Nao fazem parte do contrato minimo; um cliente pode ignora-los. Servem para o
+      // Nao fazem parte do contrato do WAHA; o driver os ignora. Servem para o
       // operador diagnosticar sem abrir terminal.
       shouldStart: row.should_start,
       // Quantas tentativas internas de reconexao ja houve nesta queda.
       reconnectAttempts: live?.reconnectAttempts ?? 0,
+      // ★ Desistiu de reconectar: precisa de /restart humano. O painel usava o mesmo
+      // rotulo "com falha" para isto e para "reconectando", que sao opostos.
+      gaveUp: live?.gaveUp ?? false,
+      // A sessao ainda autentica o webhook com a chave MESTRA do gateway? Se sim, o
+      // destino do webhook tem controle total — o painel avisa.
+      webhookUsesMasterKey: usaChaveMestraNoWebhook(row.config, config.apiKey),
       // Ha QR disponivel agora? (evita o painel chamar /auth/qr para descobrir)
       hasQr: !!live?.qr,
       createdAt: (row as { created_at?: string }).created_at ?? null,
@@ -893,7 +1005,7 @@ export class SessionManager {
       // aparecer em ciclos consecutivos. Fixando em 20s o intervalo fica uniforme
       // e o painel (que agora usa o `qrAt` real) acompanha sem adivinhar.
       qrTimeout: 20_000,
-      // Sem sincronizar historico completo: o consumidor nao usa e o payload e enorme.
+      // Sem sincronizar historico completo: o Sysled nao usa e o payload e enorme.
       syncFullHistory: false,
       // markOnlineOnConnect=false evita roubar as notificacoes do celular do cliente.
       markOnlineOnConnect: false,
@@ -974,7 +1086,7 @@ export class SessionManager {
     // ★ REAÇÕES RECEBIDAS vêm num evento DEDICADO, não em messages.upsert.
     // Doc do Baileys: "message was reacted to. If reaction was removed — then
     // reaction.text will be falsey". Sem escutar isto, a reação do cliente nunca
-    // chegava ao consumidor (o operador não via nada).
+    // chegava ao Sysled (o consultor não via nada).
     // ★ Presenca do CONTATO: 'digitando…', online, visto por ultimo.
     //
     // Chega so para chats assinados (presenceSubscribe) e so se o contato
@@ -1061,7 +1173,7 @@ export class SessionManager {
 
     if (qr) {
       // O driver do backend busca GET /api/{s}/auth/qr esperando PNG base64
-      // (`?format=raw` devolveria o texto do QR, que quebra um <img src>).
+      // (waha.js:225-232 documenta que `?format=raw` quebrava o <img src>).
       live.qr = await QRCode.toDataURL(qr, { margin: 1, width: 512 });
       // Instante de emissão: o painel calcula a idade real a partir daqui, em vez
       // de cronometrar por conta própria e dessincronizar do WhatsApp.
@@ -1075,6 +1187,7 @@ export class SessionManager {
       live.qr = null;
       live.qrAt = null;
       live.reconnectAttempts = 0;
+      live.gaveUp = false;
       const rawMe = live.sock?.user?.id ?? null;
       if (rawMe) {
         const normalized = jidNormalizedUser(rawMe);
@@ -1212,6 +1325,11 @@ export class SessionManager {
       // painel descobriria. Agora aparece como erro no diagnostico.
       live.qr = null;
       live.qrAt = null;
+      // ★ E CONSULTAVEL: o painel mostrava "com falha" tanto para sessao que esta
+      // reconectando sozinha quanto para esta, que so volta com /restart humano. Sao
+      // estados operacionalmente OPOSTOS com a mesma aparencia — o operador ou espera
+      // por algo que nao vem, ou intervem sem precisar.
+      live.gaveUp = true;
       events.emit(
         'error', live.name,
         `Desistiu de reconectar apos ${live.reconnectAttempts} tentativas — precisa de /restart`,
@@ -1300,7 +1418,7 @@ export class SessionManager {
     }
 
     // Reacao NAO e conversa: quem a trata e o evento dedicado `messages.reaction`
-    // (onReaction). Se emitissemos aqui tambem, o consumidor receberia a reacao DUAS
+    // (onReaction). Se emitissemos aqui tambem, o Sysled receberia a reacao DUAS
     // vezes — uma como reacao e outra como bolha de mensagem (bug relatado:
     // "o reaction do consultor mostra para o cliente junto com uma mensagem").
     if (type === 'reaction') {
@@ -1411,7 +1529,7 @@ export class SessionManager {
    * reagiu. Texto vazio/ausente = a pessoa REMOVEU a reação.
    *
    * Emitimos como evento `message` com payload.reaction — o shape que o
-   * o consumidor converte em evento de reacao para aplicar na
+   * waha-translate do backend converte em kind='reaction' para aplicar na
    * mensagem alvo em vez de criar bolha nova.
    */
   private async onReaction(
@@ -1506,9 +1624,9 @@ export class SessionManager {
    *
    * O Baileys entrega isso em `message-receipt.update` — NÃO em `messages.update`.
    * Escutar só o segundo era o bug: toda mensagem enviada ficava presa em 'sent'
-   * (um tique) e a UI do consumidor mostrava ícone de falha mesmo após a entrega.
+   * (um tique) e a UI do Sysled mostrava ícone de falha mesmo após a entrega.
    *
-   * Mapeamento dos timestamps para a escala de ack desta API:
+   * Mapeamento dos timestamps para a escala de ack do WAHA:
    *   playedTimestamp  -> 3 (read)      áudio ouvido
    *   readTimestamp    -> 3 (read)      dois tiques azuis
    *   receiptTimestamp -> 2 (delivered) dois tiques
@@ -1593,7 +1711,7 @@ export class SessionManager {
     // posterior nunca chegaria ao backend (consultor veria msg como enviada sem ter
     // sido). Failed e um ESTADO TERMINAL, nao um retrocesso: passa sempre, exceto
     // repeticao do proprio failed. O backend tem a guarda simetrica: delivered/read
-    // vencem failed, e failed so sobrescreve sent/NULL.
+    // vencem failed, e failed so sobrescreve sent/NULL (webhooks/waha.js:172-174).
     const isFailed = ack < 0;
     const res = await this.pool.query<{ last_ack: number }>(
       `INSERT INTO wa_gateway.sent_messages (session_name, msg_id, chat_id, last_ack)
@@ -1786,8 +1904,8 @@ export class SessionManager {
 
   /**
    * URL da foto de perfil do contato. Equivale ao
-   * `chat/fetchProfilePictureUrl` de outro gateway e ao `/contacts/profile-picture`
-   * — o consumidor usa isso para o avatar do contato.
+   * `chat/fetchProfilePictureUrl` da Evolution e ao `/contacts/profile-picture`
+   * do WAHA — o Sysled usa isso para o avatar do contato (jobs/avatar-sync.js).
    *
    * A URL é do CDN do WhatsApp e expira; quem consome deve baixar, não guardar.
    * `null` quando o contato não tem foto ou restringiu por privacidade.
@@ -1828,7 +1946,7 @@ export class SessionManager {
 
     // Throttle: status IGUAL ao ultimo emitido dentro da janela e suprimido. Isso
     // mata a tempestade de SCAN_QR_CODE a cada refresh de QR (~20s) que o backend
-    // e problema conhecido do protocolo.
+    // documenta como problema real do WAHA.
     const now = Date.now();
     const withinWindow = now - live.lastEmittedAt < config.sessionStatusThrottleMs;
     if (!changed && withinWindow) return;
