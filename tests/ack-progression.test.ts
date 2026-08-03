@@ -71,7 +71,7 @@ beforeEach(() => {
 });
 
 /** Injeta uma sessao "viva" e dispara onMessageUpdate (privado) pelo caminho real. */
-async function feedAck(baileysStatus: number, msgKeyId = 'ABC') {
+async function feedAck(baileysStatus: number, msgKeyId = 'ABC', fromMe = true) {
   const live = {
     name: 'canal-teste',
     sock: null,
@@ -90,7 +90,7 @@ async function feedAck(baileysStatus: number, msgKeyId = 'ABC') {
   await (manager as unknown as {
     onMessageUpdate(l: unknown, u: unknown): Promise<void>;
   }).onMessageUpdate(live, {
-    key: { id: msgKeyId, remoteJid: '5585999999999@s.whatsapp.net', fromMe: true },
+    key: { id: msgKeyId, remoteJid: '5585999999999@s.whatsapp.net', fromMe },
     update: { status: baileysStatus },
   });
 }
@@ -165,5 +165,31 @@ describe('progressao de ACK', () => {
     const payload = emitted.find((e) => e.event === 'message.ack')?.payload;
     assert.equal(payload?.id, 'true_5585999999999@c.us_RAW-ID-1');
     assert.equal(String(payload?.id).split('_').pop(), 'RAW-ID-1');
+  });
+
+  it('★ ACK de mensagem RECEBIDA (fromMe=false) e IGNORADO', async () => {
+    // ACK existe para mensagem que NOS enviamos. O WhatsApp emite recibo tambem quando
+    // somos NOS que lemos uma mensagem recebida — e o "visto" que o gateway envia.
+    //
+    // MEDIDO no beta antes da correcao: 4.585 linhas em `sent_messages` com msg_id
+    // `false_*` e last_ack=3, contra 385 linhas `true_*`. 92% da tabela era recibo da
+    // nossa propria leitura, gravado como se fosse mensagem enviada — inflando a tabela
+    // 13x, emitindo webhook de ack para mensagem que o consumidor nunca enviou, e
+    // tornando `elo_ack_read_total` inutil para responder "as MINHAS mensagens estao
+    // sendo lidas?".
+    //
+    // O comentario de onReceiptUpdate ja dizia "das mensagens que NOS enviamos": a
+    // intencao estava documentada, faltava a guarda.
+    await feedAck(3, 'MSG-DO-CONTATO', false);
+    assert.equal(acks().length, 0, 'nao deve emitir ack de mensagem recebida');
+  });
+
+  it('ACK de mensagem propria continua funcionando (a guarda nao e larga demais)', async () => {
+    // `feedAck` recebe o status do BAILEYS, não o ack do WAHA: status 3 (SERVER_ACK)
+    // mapeia para ack 2 (delivered). Errei isso na primeira versão do teste e a
+    // asserção pegou — a escala dupla é justamente o que `baileysStatusToWahaAck`
+    // existe para traduzir.
+    await feedAck(3, 'MINHA-MSG', true);
+    assert.deepEqual(acks(), [2], 'status 3 do Baileys = ack 2 (entregue)');
   });
 });

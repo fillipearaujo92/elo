@@ -1678,6 +1678,32 @@ export class SessionManager {
    * Emite `message.ack` com guarda de idempotência. Compartilhado por
    * messages.update e message-receipt.update.
    */
+  /**
+   * ACK só existe para mensagem que NÓS enviamos.
+   *
+   * ★ Nem `onMessageUpdate` nem `onReceiptUpdate` filtravam por `fromMe`, e o WhatsApp
+   * emite recibo TAMBÉM quando somos nós que lemos uma mensagem recebida — é o "visto"
+   * que o próprio gateway envia ao marcar como lida. Resultado medido no beta:
+   *
+   *   4.585 linhas em `sent_messages` com msg_id `false_*` e last_ack=3
+   *   contra 385 linhas `true_*` (as mensagens realmente enviadas).
+   *
+   * Ou seja: 92% da tabela era recibo da NOSSA leitura de mensagem alheia, gravado como
+   * se fosse mensagem enviada. Três danos:
+   *
+   *   1. A tabela inflou 13x — e é ela que guarda o conteúdo para responder retry
+   *      receipt. Com o teto de retenção purgando por idade, o lixo competia com o que
+   *      importa.
+   *   2. O gateway emitia webhook `message.ack` para mensagem que o consumidor NUNCA
+   *      enviou. O Sysled procura o id, não acha (ou pior, acha a mensagem inbound) e
+   *      gasta uma query por evento à toa.
+   *   3. Ruído: `elo_ack_read_total` contava 1014 leituras que não eram das nossas
+   *      mensagens, tornando a métrica inútil para responder "as minhas mensagens estão
+   *      sendo lidas?".
+   *
+   * O comentário de `onReceiptUpdate` já dizia "das mensagens que NÓS enviamos" — a
+   * intenção estava documentada, faltava a guarda.
+   */
   private async emitAck(
     live: LiveSession,
     key: WAMessage['key'] | undefined,
@@ -1686,6 +1712,10 @@ export class SessionManager {
     const chatId = key?.remoteJid ?? '';
     const rawId = key?.id ?? '';
     if (!rawId) return;
+    // ★ A guarda que faltava. Ver o comentário do método: sem ela, o recibo da NOSSA
+    // leitura de mensagem recebida virava linha em `sent_messages` e webhook de ack de
+    // uma mensagem que o consumidor nunca enviou.
+    if (!key?.fromMe) return;
 
     // ★ O msgId do ACK precisa ser IDÊNTICO ao devolvido no envio, senão o backend
     // não casa a mensagem e ela fica presa em 'sent' (um tique) para sempre.

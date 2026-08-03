@@ -11,6 +11,7 @@ import { Boom } from '@hapi/boom';
 import type { AnyMessageContent } from 'baileys';
 import type { FastifyInstance } from 'fastify';
 import { inc } from '../core/metrics.js';
+import { getUrlInfo } from '../core/link-preview.js';
 import { fetchGuardado } from '../core/net-guard.js';
 import { serializeMsgId, toBaileysJid } from '../core/waha-compat.js';
 
@@ -312,7 +313,20 @@ export function registerSendRoutes(app: FastifyInstance, { sessions }: Deps): vo
     // de métricas existe para eliminar.
     let sent;
     try {
-      sent = await sock.sendMessage(jid, content, quoted ? ({ quoted } as never) : undefined);
+      sent = await sock.sendMessage(jid, content, {
+        ...(quoted ? { quoted } : {}),
+        // ★ `getUrlInfo` PROPRIO, e nao a lib que o Baileys tentaria importar.
+        //
+        // Sem isto, toda mensagem com link registrava
+        // `ERR_MODULE_NOT_FOUND: link-preview-js` (medido no beta). A correcao obvia
+        // seria instalar a lib — mas ela tem vulnerabilidade HIGH SEM CORRECAO
+        // (GHSA-4gp8-rjrq-ch6q), e o titulo do aviso e "IPv6 and internal loopback
+        // attacks": exatamente o SSRF que o net-guard fechou em outros tres caminhos.
+        // A URL vem do TEXTO da mensagem, escolhida por quem envia.
+        //
+        // Nossa implementacao passa pelo mesmo net-guard. Ver core/link-preview.ts.
+        getUrlInfo,
+      } as never);
     } catch (err) {
       inc('outbound_error_total', session);
       throw err;
