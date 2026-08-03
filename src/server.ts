@@ -20,6 +20,7 @@ import { renderPrometheus } from './core/metrics.js';
 import { backupStatus, dumpAuth, restoreAuth, setMark } from './core/backup.js';
 import { startJanitor } from './core/janitor.js';
 import { isAuthorized, isPublicPath } from './core/access.js';
+import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import { buildOpenApi } from './openapi.js';
 
@@ -57,8 +58,9 @@ const app = Fastify({
         'req.headers["x-api-key"]',
         'req.headers["X-Api-Key"]',
         'headers["x-api-key"]',
-        // URL de webhook nos DOIS formatos exatos em que ela aparece nos logs deste
-        // projeto (core/webhook.ts:105,112,132,142). Ver o teste em tests/redact.
+        // URL de webhook, caso alguem volte a logar o objeto cru. A defesa PRINCIPAL e
+        // `urlSegura()` em core/webhook.ts, que sanitiza na origem — ver
+        // tests/segredo-em-log.test.ts. Estes paths sao a rede embaixo dela.
         'w.url',
         'webhook.url',
         // Valor de header customizado — e por padrao a chave do webhook.
@@ -72,6 +74,75 @@ const app = Fastify({
   bodyLimit: 64 * 1024 * 1024,
   // Confia no proxy (Traefik) para logar o IP real.
   trustProxy: true,
+});
+
+// ── Cabecalhos de seguranca ────────────────────────────────────────────────
+//
+// ★ Nao havia NENHUM. Duas consequencias concretas, dado que o painel guarda a chave
+// mestra em sessionStorage:
+//
+//   1. Sem CSP, um XSS no painel exfiltra a credencial de TODAS as sessoes — e ela nao
+//      tem rotacao, escopo nem revogacao individual.
+//   2. Sem `frame-ancestors`, o painel e enquadravel: clickjacking sobre "remover
+//      sessao" (apaga pareamento) e "restaurar backup" (troca as chaves Signal).
+//
+// ── Por que `unsafe-inline` em script-src fica ────────────────────────────
+// O painel tem 37 atributos `onclick` inline (medido). Remover todos e um refactor
+// grande e arriscado no arquivo de 1700 linhas, e nao e o escopo desta rodada. Um
+// nonce cobre BLOCOS `<script>`, nunca handlers de atributo — entao um CSP sem
+// `unsafe-inline` deixaria o painel inoperante, e um CSP que ninguem pode ligar nao
+// protege nada.
+//
+// O que ainda se ganha, e e a maior parte: `default-src 'self'` bloqueia script de
+// origem EXTERNA (o vetor real de exfiltracao — `<script src=evil.com>` injetado nao
+// executa), `frame-ancestors 'none'` mata o clickjacking, `object-src 'none'` mata
+// plugin legado, e HSTS/nosniff/Referrer-Policy entram de graca.
+//
+// Remover os 37 onclick e o passo que permite tirar o `unsafe-inline`. Registrado em
+// docs/INTEGRACAO.md e no plano como divida consciente, nao esquecimento.
+await app.register(helmet, {
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      // `data:` para o QR (o painel recebe PNG em base64) e para os icones SVG inline.
+      imgSrc: ["'self'", 'data:'],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      // ★ `script-src-attr` EXPLICITO. O helmet aplica `'none'` por default, e isso
+      // bloqueia handler de ATRIBUTO — os 37 `onclick` do painel. MEDIDO: com o CSP
+      // que o helmet gerou, um `onclick` nao executa no Chrome. O painel ficou no ar
+      // com os botoes MORTOS, e nenhum teste de status HTTP pegaria isso (todas as
+      // rotas seguiam 200). Foi preciso renderizar no navegador para ver.
+      //
+      // `unsafe-inline` aqui e o preco de nao reescrever os 37 handlers agora. E o
+      // item que fica: remove-los libera voltar isto para 'none'.
+      scriptSrcAttr: ["'unsafe-inline'"],
+      // O painel usa fetch() para a propria origem e mais nada. Sem WebSocket: o
+      // diagnostico em tempo real e SSE, que cai em connect-src 'self'.
+      connectSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      frameAncestors: ["'none'"],
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
+      // ★ `upgrade-insecure-requests: null` para REMOVER a diretiva. O helmet a inclui
+      // por default, e apenas omiti-la aqui nao basta — foi preciso anular. Ela faz o
+      // navegador reescrever http:// para https://, o que quebra a instalacao
+      // self-hosted em rede interna sem TLS, que e caso legitimo e comum. Medido no
+      // cabecalho real do beta: ela estava lá mesmo eu nao a tendo declarado.
+      upgradeInsecureRequests: null,
+    },
+  },
+  // HSTS so faz sentido atras de TLS. Quem roda em rede interna por HTTP nao deve
+  // receber um cabecalho que faz o navegador recusar HTTP naquele host por 6 meses —
+  // isso seria dificil de desfazer para o operador.
+  hsts: config.publicUrl.startsWith('https://')
+    ? { maxAge: 15_552_000, includeSubDomains: false }
+    : false,
+  // O painel e servido na mesma origem e nao embute nada de terceiros; as politicas
+  // COEP/COOP/CORP quebrariam o carregamento dos assets do Swagger sem ganho aqui.
+  crossOriginEmbedderPolicy: false,
+  crossOriginOpenerPolicy: false,
+  crossOriginResourcePolicy: false,
 });
 
 // ── Limite de requisicoes ──────────────────────────────────────────────────
