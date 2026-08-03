@@ -22,6 +22,9 @@ const silentLog = {
 /** Pool que replica a semantica do UPSERT de sent_messages. */
 function makeAckPool() {
   const store = new Map<string, number>();
+  // Ordem de insercao, para o `ORDER BY created_at ASC` do originalMsgId: quem entrou
+  // primeiro (o ENVIO) tem de ganhar de quem entrou depois (o ack).
+  const ordem: string[] = [];
 
   const pool = {
     async query(sql: string, params: unknown[] = []) {
@@ -33,6 +36,7 @@ function makeAckPool() {
 
         if (prev === undefined) {
           store.set(msgId, ack);
+          ordem.push(msgId);
           return { rows: [{ last_ack: ack }], rowCount: 1 };
         }
         // Reproduz o WHERE do UPSERT real, incluindo o ramo de failed.
@@ -41,6 +45,24 @@ function makeAckPool() {
         if (!allow) return { rows: [], rowCount: 0 };
         store.set(msgId, ack);
         return { rows: [{ last_ack: ack }], rowCount: 1 };
+      }
+
+      // ★ O SELECT do `originalMsgId`. Faltava aqui, e a ausencia dava FALSA
+      // CONFIANCA: o fake devolvia vazio, o codigo caia no fallback do endereco do
+      // recibo, e o teste passava sem nunca exercitar a busca pelo id cru — que e a
+      // unica defesa contra o ack sair com @lid. Agora replica a semantica real:
+      // `msg_id LIKE '%' || '_<raw>'`, ordenado pela ordem de insercao.
+      if (q.startsWith('SELECT msg_id FROM wa_gateway.sent_messages')) {
+        const sufixo = String((params as unknown[])[1] ?? '');
+        const achado = ordem.find((id) => id.endsWith(sufixo));
+        // ⚠ LIMITE deste fake, registrado por honestidade: ele nao modela a coluna
+        // `content`. Verifiquei por mutacao — reintroduzir `AND content IS NOT NULL` na
+        // query do originalMsgId NAO quebra nenhum teste, porque aqui nao existe conteudo
+        // para filtrar. O que os testes cobrem e a ancoragem do envio (mutar
+        // `rememberSentMessage` para nao criar linha sem conteudo QUEBRA o teste acima).
+        // A parte do `content IS NOT NULL` foi validada contra o Postgres do beta: 305
+        // linhas @lid sem conteudo eram exatamente as que a condicao ignorava.
+        return { rows: achado ? [{ msg_id: achado }] : [], rowCount: achado ? 1 : 0 };
       }
       return { rows: [], rowCount: 0 };
     },
@@ -165,6 +187,55 @@ describe('progressao de ACK', () => {
     const payload = emitted.find((e) => e.event === 'message.ack')?.payload;
     assert.equal(payload?.id, 'true_5585999999999@c.us_RAW-ID-1');
     assert.equal(String(payload?.id).split('_').pop(), 'RAW-ID-1');
+  });
+
+  it('★ o ack usa o endereco do ENVIO, nao o do recibo (@c.us, nao @lid)', async () => {
+    // ── O bug que o Filipe viu no beta ────────────────────────────────────────
+    // O WhatsApp endereca o MESMO contato de duas formas: o envio sai pelo telefone
+    // (@c.us) e o recibo volta pelo @lid do dispositivo. O consumidor gravou a mensagem
+    // com o telefone, entao um ack emitido com @lid nunca casa — e a mensagem fica
+    // "presa em enviada" para sempre, mesmo entregue E LIDA no celular.
+    //
+    // A defesa e o `originalMsgId`, que busca pelo id CRU (o unico componente estavel) e
+    // reemite o ack com o endereco original. Ela existia e FALHAVA por duas razoes,
+    // ambas corrigidas:
+    //
+    //   1. `rememberSentMessage` tinha `if (!content) return` — mensagem sem conteudo
+    //      guardavel nao criava linha, e nao havia o que o originalMsgId achar.
+    //   2. `originalMsgId` exigia `content IS NOT NULL`, entao ignorava justamente as
+    //      linhas criadas sem conteudo.
+    //
+    // Medido no beta: 305 linhas `true_...@lid_...` sem conteudo (acks orfaos, travados
+    // em ack 2) contra 30 linhas `@c.us` que progrediram normalmente para ack 3.
+    //
+    // Aqui: registramos o envio pelo TELEFONE e disparamos o recibo pelo LID. O ack tem
+    // de sair com o endereco do ENVIO.
+    const RAW = 'ID-CRU-LID-TESTE';
+    await manager.rememberSentMessage(
+      'canal-teste',
+      { id: RAW, remoteJid: '5585921774022@s.whatsapp.net', fromMe: true },
+      // Sem conteudo DE PROPOSITO: e o caso que antes nao criava linha nenhuma.
+      null,
+    );
+    // O recibo chega pelo @lid — endereco diferente, mesmo id cru.
+    await (manager as unknown as {
+      onMessageUpdate(l: unknown, u: unknown): Promise<void>;
+    }).onMessageUpdate(
+      { name: 'canal-teste', config: { webhooks: [{ url: 'http://app/w' }] } },
+      { key: { id: RAW, remoteJid: '80131355848789@lid', fromMe: true }, update: { status: 4 } },
+    );
+
+    const ackEmitido = emitted.filter((e) => e.event === 'message.ack').at(-1);
+    assert.ok(ackEmitido, 'o ack tem de ser emitido');
+    assert.equal(
+      ackEmitido.payload.id,
+      `true_5585921774022@c.us_${RAW}`,
+      'o id do ack tem de usar o endereco do ENVIO (@c.us), nao o do recibo (@lid)',
+    );
+    assert.ok(
+      !String(ackEmitido.payload.id).includes('@lid'),
+      'nenhum @lid pode aparecer no id do ack',
+    );
   });
 
   it('★ ACK de mensagem RECEBIDA (fromMe=false) e IGNORADO', async () => {

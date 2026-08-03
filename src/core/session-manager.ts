@@ -1665,8 +1665,24 @@ export class SessionManager {
   private async originalMsgId(session: string, rawId: string): Promise<string | null> {
     const res = await this.pool
       .query<{ msg_id: string }>(
+        // ★ SEM `content IS NOT NULL`, e isso foi um BUG medido em producao.
+        //
+        // A condicao existia para "achar a linha do envio, que tem conteudo". Mas
+        // `rememberSentMessage` grava o conteudo de forma assincrona e com `.catch()` que
+        // so loga — e para mensagem sem conteudo guardavel (ou quando a gravacao ainda
+        // nao completou) a linha do envio existe SEM content. Nesses casos a busca
+        // devolvia null, caia no `localMsgId` montado com o endereco do RECIBO (@lid), e
+        // criava uma linha NOVA em vez de atualizar a original.
+        //
+        // Medido no beta: 305 linhas `true_...@lid_...`, TODAS sem content, contra 30
+        // linhas `@c.us` com content e ack=3. As `@lid` eram acks orfaos — a mensagem
+        // original ficava em ack=2 e o consumidor mostrava "presa em sent" mesmo com a
+        // mensagem entregue e lida no celular. Era exatamente o sintoma relatado.
+        //
+        // `ORDER BY created_at ASC` continua garantindo que, havendo duas linhas para o
+        // mesmo id cru, ganha a do ENVIO (criada primeiro) e nao a do ack.
         `SELECT msg_id FROM wa_gateway.sent_messages
-          WHERE session_name = $1 AND msg_id LIKE '%' || $2 AND content IS NOT NULL
+          WHERE session_name = $1 AND msg_id LIKE '%' || $2
           ORDER BY created_at ASC LIMIT 1`,
         [session, `_${rawId}`],
       )
@@ -1862,11 +1878,27 @@ export class SessionManager {
   }
 
   /**
-   * Guarda o conteúdo de uma mensagem ENVIADA, para poder reenviá-la quando o
-   * dispositivo do destinatário pedir retry (ver getMessage no openSocket).
+   * Registra uma mensagem ENVIADA: o endereço canônico dela e, quando houver, o
+   * conteúdo para responder retry receipt (ver getMessage no openSocket).
    *
-   * Sem isso, um contato cujo celular não conseguiu decifrar fica preso em
+   * Sem o conteúdo, um contato cujo celular não conseguiu decifrar fica preso em
    * "Aguardando mensagem" — a mensagem aparece no WhatsApp Web dele mas nunca no app.
+   *
+   * ★ A linha é criada MESMO SEM CONTEÚDO, e isso corrige um bug medido em produção.
+   *
+   * Antes havia `if (!raw || !content) return`, então mensagem sem conteúdo guardável
+   * não deixava rastro nenhum. E é essa linha que ANCORA o endereço do envio: quando o
+   * recibo chega — e ele chega pelo `@lid` do dispositivo, não pelo `@c.us` do envio —
+   * o `originalMsgId` procura o id cru para reemitir o ack com o endereço ORIGINAL. Sem
+   * a linha, ele não achava nada, caía no endereço do recibo e criava uma linha NOVA
+   * `true_<lid>@lid_<raw>` em vez de atualizar a do envio.
+   *
+   * Efeito no consumidor: a mensagem original ficava em ack=2 para sempre e o Sysled
+   * mostrava "presa em enviada" mesmo com a mensagem entregue E LIDA no celular — que é
+   * exatamente o sintoma que o Filipe relatou no beta.
+   *
+   * Medido: 305 linhas `true_...@lid_...`, todas sem conteúdo (acks órfãos), contra 30
+   * linhas `@c.us` com conteúdo que progrediram para ack=3 normalmente.
    */
   async rememberSentMessage(
     session: string,
@@ -1874,16 +1906,27 @@ export class SessionManager {
     content: unknown,
   ): Promise<void> {
     const raw = key?.id;
-    if (!raw || !content) return;
+    if (!raw) return;
     const chatId = toWahaChatId(key.remoteJid ?? '');
     const msgId = `${key.fromMe ? 'true' : 'false'}_${chatId}_${raw}`;
     await this.pool
       .query(
+        // COALESCE no content: um upsert SEM conteúdo (ex.: reação, que não tem corpo
+        // guardável) não pode APAGAR o conteúdo que já estava lá de um envio anterior
+        // com o mesmo id.
         `INSERT INTO wa_gateway.sent_messages (session_name, msg_id, chat_id, last_ack, content)
          VALUES ($1, $2, $3, 0, $4::jsonb)
          ON CONFLICT (session_name, msg_id) DO UPDATE
-           SET content = EXCLUDED.content, updated_at = NOW()`,
-        [session, msgId, chatId, JSON.stringify(content, BufferJSON.replacer)],
+           SET content = COALESCE(EXCLUDED.content, wa_gateway.sent_messages.content),
+               updated_at = NOW()`,
+        [
+          session,
+          msgId,
+          chatId,
+          content === null || content === undefined
+            ? null
+            : JSON.stringify(content, BufferJSON.replacer),
+        ],
       )
       .catch((err) => {
         // Não pode derrubar o envio — a mensagem já foi. Mas logamos: sem o
