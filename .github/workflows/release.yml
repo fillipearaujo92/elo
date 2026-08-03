@@ -27,7 +27,7 @@ jobs:
       # Necessário para o GITHUB_TOKEN poder escrever no ghcr.io.
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
