@@ -42,7 +42,7 @@ export const config = {
   host: optional('HOST', '0.0.0.0'),
 
   // Autenticacao das rotas: header X-Api-Key. O driver do backend manda essa chave
-  // (wa-provider/index.js le waha.api_key de app_settings) e o gateway a devolve
+  // (o driver le waha.api_key de app_settings) e o gateway a devolve
   // como customHeaders X-Webhook-Key nos webhooks.
   apiKey: required('API_KEY'),
 
@@ -53,18 +53,37 @@ export const config = {
   mediaDir: optional('MEDIA_DIR', '/data/media'),
 
   // URL publica do gateway. Usada para montar a URL de midia nos webhooks.
-  // O driver do backend reescreve localhost:3000 -> baseUrl publico (waha.js:249),
+  // O driver do backend reescreve localhost:3000 -> baseUrl publico (o driver do consumidor),
   // entao emitir localhost funcionaria, mas emitir a URL correta e mais limpo.
   publicUrl: optional('PUBLIC_URL', ''),
 
   logLevel: optional('LOG_LEVEL', 'info'),
+
+  // ★ Nivel de log do BAILEYS, separado do nivel do ELO. Existe porque os dois tem
+  // volumes muito diferentes: em `info`, o Baileys narra cada upload de pre-key e cada
+  // passo de handshake, e isso AFOGA o log do gateway. Medido no beta: de 200 linhas de
+  // log, a maioria era ruido de terceiros e de healthcheck, empurrando o evento util
+  // (webhook perdido, mensagem nao decifrada) fora do buffer do `docker logs`.
+  //
+  // Default `warn`: o Baileys so aparece quando ha algo errado, que e quando se olha o
+  // log dele. Para depurar protocolo: BAILEYS_LOG_LEVEL=debug.
+  baileysLogLevel: optional('BAILEYS_LOG_LEVEL', 'warn'),
+
+  // ★ Silencia o par "incoming request"/"request completed" das rotas de health.
+  // O healthcheck do Docker bate em /health a cada 30s -> 2 linhas x 2880/dia de log
+  // que nao dizem nada (se o container esta de pe, o health passou). Medido no beta:
+  // era a maior fonte isolada de linhas.
+  //
+  // Nao remove o log de ERRO: /health respondendo != 200 continua sendo logado, que e
+  // a unica ocasiao em que a rota interessa.
+  logHealthRequests: optional('LOG_HEALTH_REQUESTS', '') === '1',
 
   // Retencao da tabela sent_messages (idempotencia de ack). Acks chegam em minutos;
   // 7 dias e folga generosa e mantem a tabela pequena.
   sentMessagesRetentionDays: num('SENT_MESSAGES_RETENTION_DAYS', 7),
 
   // Throttle de session.status. O WAHA real emite um evento a cada refresh de QR
-  // (~20s) e isso causava tempestade no backend (webhooks/waha.js:91-95 documenta).
+  // (~20s) e isso causava tempestade no backend (o receptor de webhook do consumidordocumenta).
   // Aqui suprimimos repeticoes do MESMO status dentro da janela.
   sessionStatusThrottleMs: num('SESSION_STATUS_THROTTLE_MS', 60_000),
 

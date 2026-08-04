@@ -1,7 +1,7 @@
 // src/routes/sessions.ts
 //
 // Endpoints de sessao no formato WAHA. Consumidos por:
-//   - wa-provider/waha.js: connectionState, start, ensureSessionAndQR, deleteInstance,
+//   - o driver do consumidorconnectionState, start, ensureSessionAndQR, deleteInstance,
 //     setIgnoreGroups
 //   - routes/channels.js do backend (criacao de canal e QR na UI)
 
@@ -19,7 +19,7 @@ interface Deps {
 export function registerSessionRoutes(app: FastifyInstance, { sessions }: Deps): void {
   // POST /api/sessions — cria (e opcionalmente inicia) a sessao.
   // O driver manda { name, start: true, config: { webhooks: [...] } } e trata 422
-  // "already exists" como benigno (waha.js:205), reaplicando o config via PUT.
+  // "already exists" como benigno (o driver do consumidor), reaplicando o config via PUT.
   app.post<{ Body: { name?: string; label?: string; start?: boolean; config?: SessionConfig } }>(
     '/api/sessions',
     async (req, reply) => {
@@ -31,7 +31,7 @@ export function registerSessionRoutes(app: FastifyInstance, { sessions }: Deps):
       // caminho de mídia, chaves do auth state). Ver src/core/slug.ts.
       //
       // Compatibilidade: quando o nome JÁ é um slug válido (é o caso do backend
-      // do Sysled, que envia channels.identifier slugificado), usamos como está —
+      // do consumidor, que envia channels.identifier slugificado), usamos como está —
       // assim nada muda para quem já integra.
       const v = validateName(raw);
       if (!v.ok) return reply.code(400).send({ message: v.error });
@@ -301,7 +301,7 @@ export function registerSessionRoutes(app: FastifyInstance, { sessions }: Deps):
   });
 
   // POST /api/sessions/{session}/start e /restart.
-  // O driver tenta /restart e cai para /start (waha.js:125-131), entao os dois existem.
+  // O driver tenta /restart e cai para /start (o driver do consumidor), entao os dois existem.
   for (const path of ['/api/sessions/:session/start', '/api/sessions/:session/restart']) {
     app.post<{ Params: { session: string } }>(path, async (req, reply) => {
       const name = req.params.session;
@@ -309,7 +309,7 @@ export function registerSessionRoutes(app: FastifyInstance, { sessions }: Deps):
       if (!row) return reply.code(404).send({ message: 'sessao nao encontrada' });
 
       // Responde imediatamente: subir o socket leva segundos e o driver so quer
-      // saber se o comando foi ACEITO (`accepted`, waha.js:123).
+      // saber se o comando foi ACEITO (`accepted`, o driver do consumidor).
       const isRestart = path.endsWith('/restart');
       const action = isRestart ? sessions.restart(name) : sessions.start(name);
       action.catch((err) =>
@@ -329,7 +329,7 @@ export function registerSessionRoutes(app: FastifyInstance, { sessions }: Deps):
 
   // GET /api/{session}/auth/qr — QR como PNG.
   // O driver manda Accept: application/json e espera { mimetype, data } com data =
-  // base64 do PNG (waha.js:225-232). Com outro Accept devolvemos o PNG binario.
+  // base64 do PNG (o driver do consumidor). Com outro Accept devolvemos o PNG binario.
   app.get<{ Params: { session: string } }>('/api/:session/auth/qr', async (req, reply) => {
     const name = req.params.session;
     const live = sessions.getLive(name);

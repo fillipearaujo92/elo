@@ -29,7 +29,7 @@ function makeFakePool() {
     async query(sql: string, params: unknown[] = []) {
       const q = sql.replace(/\s+/g, ' ').trim();
 
-      if (q.startsWith('INSERT INTO wa_gateway.sessions')) {
+      if (q.startsWith('INSERT INTO elo.sessions')) {
         const [name, cfg, shouldStart, label] = params as [string, string, boolean, string | null];
         const row = {
           name,
@@ -43,7 +43,7 @@ function makeFakePool() {
         sessions.set(name, row);
         return { rows: [row], rowCount: 1 };
       }
-      if (q.startsWith('UPDATE wa_gateway.sessions SET config')) {
+      if (q.startsWith('UPDATE elo.sessions SET config')) {
         const [name, cfg, label, shouldStart] = params as [
           string, string, string | null | undefined, boolean | null | undefined,
         ];
@@ -64,17 +64,17 @@ function makeFakePool() {
       if (q.startsWith('SELECT name, label, status, me_id') && q.includes('ORDER BY')) {
         return { rows: [...sessions.values()], rowCount: sessions.size };
       }
-      if (q.startsWith('SELECT phone, push_name FROM wa_gateway.lid_map')) {
+      if (q.startsWith('SELECT phone, push_name FROM elo.lid_map')) {
         const [, lid] = params as [string, string];
         const hit = lids.get(lid);
         return { rows: hit ? [hit] : [], rowCount: hit ? 1 : 0 };
       }
-      if (q.startsWith('INSERT INTO wa_gateway.lid_map')) {
+      if (q.startsWith('INSERT INTO elo.lid_map')) {
         const [, lid, phone, pushName] = params as [string, string, string, string | null];
         lids.set(lid, { phone, push_name: pushName });
         return { rows: [], rowCount: 1 };
       }
-      if (q.startsWith('INSERT INTO wa_gateway.sent_messages')) {
+      if (q.startsWith('INSERT INTO elo.sent_messages')) {
         const [, msgId, , ack] = params as [string, string, string, number];
         const prev = acks.get(msgId) ?? -99;
         if (ack <= prev) return { rows: [], rowCount: 0 };
@@ -176,7 +176,7 @@ describe('ciclo de vida da sessao', () => {
   });
 
   it('recriar a mesma sessao devolve 422 (o driver trata como benigno)', async () => {
-    // waha.js:205 aceita 422 e reaplica o config via PUT. Devolver 200 aqui faria o
+    // o driver do consumidoraceita 422 e reaplica o config via PUT. Devolver 200 aqui faria o
     // driver PULAR a reaplicacao e o webhook ficaria desatualizado.
     const res = await app.inject({
       method: 'POST', url: '/api/sessions', headers: auth,
@@ -213,7 +213,7 @@ describe('ciclo de vida da sessao', () => {
     });
     assert.equal(res.statusCode, 200);
     const body = res.json();
-    // Campos exatos lidos por wa-provider/waha.js:106-119.
+    // Campos exatos lidos por o driver do consumidor.
     assert.ok('status' in body, 'status e obrigatorio');
     assert.ok('me' in body, 'me decide hasMe (gatilho de alert_qr)');
     assert.equal(body.engine.engine, 'BAILEYS');
@@ -426,7 +426,7 @@ describe('contatos e LID', () => {
   });
 
   it('lids/{lid} devolve { lid, pn } quando mapeado', async () => {
-    // Campo `pn` e o que resolveLidToPhone le (waha.js:146). Nome errado quebraria
+    // Campo `pn` e o que resolveLidToPhone le (o driver do consumidor). Nome errado quebraria
     // a resolucao silenciosamente.
     fake.lids.set('80131355848789@lid', { phone: '5585986479003', push_name: 'Fulano' });
     const res = await app.inject({

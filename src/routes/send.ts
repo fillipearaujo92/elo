@@ -2,7 +2,7 @@
 //
 // Endpoints de envio no formato WAHA: sendText, sendImage, sendVoice, sendVideo, sendFile.
 //
-// Contrato do retorno: wa-provider/waha.js:extractMsgId() aceita `id` como STRING
+// Contrato do retorno: o driver do consumidor:extractMsgId() aceita `id` como STRING
 // direto (caminho GOWS) — devolvemos o id serializado como string em `id`, e o driver
 // considera ok apenas quando ha id (`ok: res.ok && id`). Retornar 200 sem id faz o
 // backend marcar a mensagem como falha.
@@ -345,7 +345,7 @@ export function registerSendRoutes(app: FastifyInstance, { sessions }: Deps): vo
 
     const id = serializeMsgId(sent.key);
     return {
-      // `id` string: extractMsgId retorna direto (waha.js:18).
+      // `id` string: extractMsgId retorna direto (o driver do consumidor).
       id,
       // _data espelha o shape do WAHA para consumidores que leem dali.
       _data: { id: { id: sent.key.id, _serialized: id }, Info: { ID: sent.key.id } },
@@ -693,7 +693,7 @@ export function registerSendRoutes(app: FastifyInstance, { sessions }: Deps): vo
   });
 
   // POST /api/sendFile — documento/anexo.
-  // Tambem e o fallback do driver quando sendVideo falha (waha.js:100), entao precisa
+  // Tambem e o fallback do driver quando sendVideo falha (o driver do consumidor), entao precisa
   // aceitar qualquer mimetype.
   app.post<{ Body: SendBody }>('/api/sendFile', async (req) => {
     const alvo = prepare(req.body);

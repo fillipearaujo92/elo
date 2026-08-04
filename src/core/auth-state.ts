@@ -75,7 +75,7 @@ export async function usePostgresAuthState(
 ): Promise<AuthStateHandle> {
   // 1. Carrega (ou cria) as credenciais da sessao.
   const credsRes = await pool.query<{ creds: unknown }>(
-    `SELECT creds FROM wa_gateway.auth_creds WHERE session_name = $1`,
+    `SELECT creds FROM elo.auth_creds WHERE session_name = $1`,
     [sessionName],
   );
 
@@ -85,7 +85,7 @@ export async function usePostgresAuthState(
 
   const saveCreds = async (): Promise<void> => {
     await pool.query(
-      `INSERT INTO wa_gateway.auth_creds (session_name, creds, updated_at)
+      `INSERT INTO elo.auth_creds (session_name, creds, updated_at)
        VALUES ($1, $2::jsonb, NOW())
        ON CONFLICT (session_name)
          DO UPDATE SET creds = EXCLUDED.creds, updated_at = NOW()`,
@@ -105,7 +105,7 @@ export async function usePostgresAuthState(
         if (!ids.length) return out;
 
         const res = await pool.query<{ key_id: string; key_data: unknown }>(
-          `SELECT key_id, key_data FROM wa_gateway.auth_keys
+          `SELECT key_id, key_data FROM elo.auth_keys
             WHERE session_name = $1 AND key_type = $2 AND key_id = ANY($3::text[])`,
           [sessionName, type, ids],
         );
@@ -162,7 +162,7 @@ export async function usePostgresAuthState(
             }
             for (const [type, id, value] of ops) {
               await client.query(
-                `INSERT INTO wa_gateway.auth_keys
+                `INSERT INTO elo.auth_keys
                    (session_name, key_type, key_id, key_data, updated_at)
                  VALUES ($1, $2, $3, $4::jsonb, NOW())
                  ON CONFLICT (session_name, key_type, key_id)
@@ -172,7 +172,7 @@ export async function usePostgresAuthState(
             }
             for (const [type, id] of dels) {
               await client.query(
-                `DELETE FROM wa_gateway.auth_keys
+                `DELETE FROM elo.auth_keys
                   WHERE session_name = $1 AND key_type = $2 AND key_id = $3`,
                 [sessionName, type, id],
               );
@@ -203,6 +203,6 @@ export async function usePostgresAuthState(
  * viraram lixo e mante-las faria o socket tentar reconectar com pareamento morto.
  */
 export async function clearAuthState(pool: Pool, sessionName: string): Promise<void> {
-  await pool.query(`DELETE FROM wa_gateway.auth_creds WHERE session_name = $1`, [sessionName]);
-  await pool.query(`DELETE FROM wa_gateway.auth_keys WHERE session_name = $1`, [sessionName]);
+  await pool.query(`DELETE FROM elo.auth_creds WHERE session_name = $1`, [sessionName]);
+  await pool.query(`DELETE FROM elo.auth_keys WHERE session_name = $1`, [sessionName]);
 }

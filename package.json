@@ -1,8 +1,8 @@
 {
-  "name": "@sysled/wa-gateway",
-  "version": "0.1.0",
+  "name": "elo-gateway",
+  "version": "0.2.1",
   "private": true,
-  "description": "Gateway WhatsApp proprio do Sysled Chat, wire-compativel com a API do WAHA",
+  "description": "ELO — gateway WhatsApp self-hosted. Instale no seu servidor e integre no seu sistema de atendimento.",
   "type": "module",
   "engines": {
     "node": ">=22"
@@ -30,5 +30,9 @@
     "@types/pg": "^8.11.10",
     "@types/qrcode": "^1.5.5",
     "typescript": "^5.7.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fillipearaujo92/elo.git"
   }
 }

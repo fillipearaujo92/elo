@@ -115,3 +115,47 @@ function mesmaChave(a: string, b: string): boolean {
   const hb = createHash('sha256').update(b, 'utf8').digest();
   return timingSafeEqual(ha, hb);
 }
+
+// ── Politica de LOG de acesso ──────────────────────────────────────────────
+//
+// Aqui e nao inline no server.ts pelo MESMO motivo que `isPublicPath` mora aqui: o
+// server.ts nao tem teste, e regra inline num hook e regra que ninguem verifica. A
+// diferenca entre "silencia o healthcheck" e "silencia o healthcheck que esta
+// FALHANDO" e um `status < 400` — exatamente o tipo de detalhe que passa por revisao
+// e some no log quando importa.
+
+/**
+ * Rotas cujo acesso BEM-SUCEDIDO nao merece linha de log.
+ *
+ * So health: e a unica rota que um agente externo bate em intervalo fixo para sempre.
+ * `/metrics` fica FORA de proposito — quem raspa metrica costuma ser um scraper cujo
+ * acesso interessa auditar (a rota e protegida justamente porque nome de sessao
+ * identifica cliente).
+ */
+export const ROTAS_SEM_LOG: ReadonlySet<string> = new Set(['/health', '/healthz']);
+
+/**
+ * Decide se a requisicao entra no log de acesso.
+ *
+ * ★ MEDIDO no beta antes de existir: o healthcheck do Docker batia em /health a cada
+ * 30s e o Fastify emitia DUAS linhas por vez ("incoming request" + "request
+ * completed"). Resultado real, contado em 200 linhas de `docker logs`: a maioria era
+ * esse par. Webhook perdido e mensagem nao decifrada — os dois eventos que respondem
+ * "estou perdendo mensagem?" — saiam do buffer empurrados por ruido.
+ *
+ * ★ A guarda que importa: `status >= 400` SEMPRE loga, inclusive em rota silenciosa.
+ * Container de pe servindo 503 no health e o caso confuso de diagnosticar, e silenciar
+ * justamente esse seria trocar ruido por cegueira. Health em 200 nao e informacao;
+ * health em qualquer outra coisa e.
+ */
+export function deveLogarRequisicao(
+  url: string,
+  status: number,
+  logHealth = false,
+): boolean {
+  if (logHealth) return true;
+  if (status >= 400) return true;
+  // Compara sem query string: `/health?x=1` e a mesma rota.
+  const caminho = url.split('?')[0] ?? '';
+  return !ROTAS_SEM_LOG.has(caminho);
+}

@@ -42,7 +42,7 @@ describe('purgeSentMessages', () => {
     const n = await purgeSentMessages(pool as never, 7);
     assert.equal(n, 12);
     assert.equal(pool.queries.length, 1);
-    assert.match(pool.queries[0]!.sql, /DELETE FROM wa_gateway\.sent_messages/);
+    assert.match(pool.queries[0]!.sql, /DELETE FROM elo\.sent_messages/);
     assert.match(pool.queries[0]!.sql, /created_at </, 'tem de filtrar por idade');
     assert.deepEqual(pool.queries[0]!.params, [7]);
   });

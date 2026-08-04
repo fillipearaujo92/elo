@@ -51,7 +51,7 @@ function makePool(initial: Partial<Row> = {}) {
     row,
     async query(sql: string, params: unknown[] = []) {
       const q = sql.replace(/\s+/g, ' ');
-      if (q.includes('UPDATE wa_gateway.sessions')) {
+      if (q.includes('UPDATE elo.sessions')) {
         const [, cfg, label, shouldStart] = params as [string, string, string | null, boolean | null];
         row.config = JSON.parse(cfg);
         // COALESCE: null preserva o valor atual — é o que permite o patch parcial.
@@ -61,14 +61,14 @@ function makePool(initial: Partial<Row> = {}) {
       }
       // upsertSession: INSERT ... ON CONFLICT DO UPDATE. Params na ordem
       // [name, config, shouldStart, label].
-      if (q.includes('INSERT INTO wa_gateway.sessions')) {
+      if (q.includes('INSERT INTO elo.sessions')) {
         const [, cfg, shouldStart, label] = params as [string, string, boolean, string | null];
         row.config = JSON.parse(cfg);
         row.should_start = shouldStart;
         if (label !== null) row.label = label;
         return { rows: [{ ...row }], rowCount: 1 };
       }
-      if (q.includes('FROM wa_gateway.sessions')) {
+      if (q.includes('FROM elo.sessions')) {
         return { rows: [{ ...row }], rowCount: 1 };
       }
       return { rows: [], rowCount: 0 };

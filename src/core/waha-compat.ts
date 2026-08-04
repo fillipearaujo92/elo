@@ -1,19 +1,21 @@
 // src/core/waha-compat.ts
 //
-// Traducao PURA (sem rede/DB) dos tipos do Baileys para os shapes da API REST.
+// Traducao PURA (sem rede/DB) Baileys -> shapes da API do WAHA.
 //
-// Este modulo e a ESPECIFICACAO do contrato publico: e o que define o formato dos
-// payloads de webhook e dos campos de status. Quem consome a API depende destes
-// shapes, entao qualquer divergencia aqui quebra a integracao em producao.
+// Este modulo e a especificacao de compatibilidade do gateway. O sistema consumidor
+// consome estes shapes em o tradutor do consumidor e
+// a maquina de reconexao do consumidor. Qualquer divergencia aqui quebra o
+// consumidor em producao, entao cada decisao abaixo referencia o consumidor.
 //
-// Sem I/O de proposito: tudo aqui e testavel isolado.
+// Sem I/O de proposito: tudo aqui e testavel isolado (tests/waha-compat.test.ts).
 
 import { DisconnectReason, getContentType, getDevice } from 'baileys';
 import type { proto, WAMessage } from 'baileys';
 
 // ── Status de sessao ────────────────────────────────────────────────────────
-// Quem consome a API le `status` para decidir o que fazer, comparando por string
-// EXATA. Estes 5 valores sao o vocabulario COMPLETO:
+// O backend le `status` em connectionState() (o driver do consumidor) e a maquina de
+// reconexao (a maquina de reconexao do consumidor) faz decisoes por string exata. Estes 5 valores
+// sao o vocabulario COMPLETO que ela entende:
 //   WORKING       -> conectado (action: recovered)
 //   STARTING      -> transiente, nunca alerta (action: idle)
 //   SCAN_QR_CODE  -> logout, so humano resolve com QR (action: alert_qr)
@@ -27,23 +29,23 @@ export type WahaSessionStatus =
   | 'FAILED';
 
 // ── ACK ────────────────────────────────────────────────────────────────────
-// Escala de ack: {0,1:'sent', 2:'delivered', 3,4:'read', -1:'failed'}.
+// o tradutor do consumidormapeia ACK_MAP = {0,1:'sent', 2:'delivered', 3,4:'read', -1:'failed'}.
 // O Baileys entrega proto.WebMessageInfo.Status como enum:
 //   ERROR=0, PENDING=1, SERVER_ACK=2, DELIVERY_ACK=3, READ=4, PLAYED=5
-// Precisamos converter para a ESCALA DESTA API (nao repassar o numero do Baileys),
+// Precisamos converter para a ESCALA DO WAHA (nao repassar o numero do Baileys),
 // senao PENDING(1) do Baileys viraria 'sent' por acidente e READ(4) viraria 'read'
 // por coincidencia, mas SERVER_ACK(2) -> 'delivered' estaria ERRADO (server ack e
 // apenas 'sent': o servidor recebeu, o destinatario nao).
-const BAILEYS_STATUS_TO_ACK: Record<number, number> = {
+const BAILEYS_STATUS_TO_WAHA_ACK: Record<number, number> = {
   0: -1, // ERROR        -> failed
-  1: 0, //  PENDING      -> sent   (ack 0/1 = sent)
+  1: 0, //  PENDING      -> sent   (WAHA ack 0/1 = sent)
   2: 1, //  SERVER_ACK   -> sent   (servidor recebeu; NAO e delivered)
   3: 2, //  DELIVERY_ACK -> delivered
   4: 3, //  READ         -> read
-  5: 3, //  PLAYED       -> read   (audio ouvido; nao ha estado 'played')
+  5: 3, //  PLAYED       -> read   (audio ouvido; backend nao tem estado 'played')
 };
 
-const ACK_NAME: Record<number, string> = {
+const WAHA_ACK_NAME: Record<number, string> = {
   [-1]: 'ERROR',
   0: 'PENDING',
   1: 'SERVER',
@@ -52,27 +54,29 @@ const ACK_NAME: Record<number, string> = {
   4: 'PLAYED',
 };
 
-/** Converte o status do Baileys para o ack numerico desta API (-1..4). */
+/** Converte o status do Baileys para o ack numerico do WAHA (-1..4). */
 export function baileysStatusToWahaAck(status: number | null | undefined): number {
   if (status === null || status === undefined) return 0;
-  const mapped = BAILEYS_STATUS_TO_ACK[status];
+  const mapped = BAILEYS_STATUS_TO_WAHA_ACK[status];
   return mapped === undefined ? 0 : mapped;
 }
 
 export function wahaAckName(ack: number): string {
-  return ACK_NAME[ack] ?? 'PENDING';
+  return WAHA_ACK_NAME[ack] ?? 'PENDING';
 }
 
 // ── Ids de mensagem ────────────────────────────────────────────────────────
-// Ponto critico de integracao. Dois caminhos do consumidor precisam CASAR:
+// Ponto critico de integracao. Dois caminhos no backend precisam CASAR:
 //
-//  1. Envio: ele le `id` da resposta do send (aceita string direto), entao
-//     devolvemos o id SERIALIZADO como string.
-//  2. ACK: ele recebe o id do evento e costuma normalizar com split('_').pop(),
-//     o que tambem casa o id CRU.
+//  1. Envio: o extrator de id do driver le a resposta do send. Ele aceita `id` string
+//     direto (caminho GOWS), entao devolvemos o id SERIALIZADO como string.
+//  2. ACK: applyAck() (o receptor de webhook do consumidor) recebe o id do evento e normaliza
+//     fazendo split('_').pop() para tambem casar o id CRU.
 //
-// Logo, o formato "<fromMe>_<chatId>_<rawId>" satisfaz os dois: o envio grava o
-// serializado, o ack chega serializado, e o split casa o cru como bonus.
+// Logo, o formato serializado "<fromMe>_<chatId>_<rawId>" satisfaz os dois: o envio
+// grava o serializado, o ack chega serializado e o split casa o cru como bonus.
+// Emitir o id CRU no envio e o SERIALIZADO no ack tambem funcionaria (e o que o
+// WAHA real faz), mas serializar nos dois e mais consistente e igualmente compativel.
 export function serializeMsgId(key: {
   remoteJid?: string | null;
   id?: string | null;
@@ -84,10 +88,10 @@ export function serializeMsgId(key: {
 }
 
 // ── JIDs ───────────────────────────────────────────────────────────────────
-// O Baileys fala @s.whatsapp.net; o WhatsApp Web (e esta API) fala @c.us. O
-// consumidor detecta @lid pelo sufixo e monta `${digits}@c.us` para telefone.
-// Grupos sao @g.us nos dois. @lid passa INTACTO: e um id oculto que nao pode ser
-// reescrito (ver lid.ts).
+// O Baileys fala @s.whatsapp.net; o WAHA (e o WhatsApp Web) fala @c.us. O backend
+// espera @c.us: o tradutor do consumidordetecta @lid pelo sufixo e o resolveSendTarget
+// (o driver do consumidor) monta `${digits}@c.us`. Grupos sao @g.us nos dois. @lid passa intacto
+// porque e um id oculto que NAO pode ser reescrito (o driver do consumidor).
 export function toWahaChatId(jid: string): string {
   if (!jid) return '';
 
@@ -95,7 +99,7 @@ export function toWahaChatId(jid: string): string {
   // Remove o sufixo de device do multi-device ("5585999:12@s.whatsapp.net" e
   // "207919433941235:46@lid"). CRÍTICO para @lid também: sem isso a MESMA mensagem
   // gerava dois msgId distintos (um com :46, outro sem), quebrando a guarda de
-  // idempotência do ack e o casamento do id no consumidor.
+  // idempotência do ack e o casamento do id no backend.
   const user = localRaw.split(':')[0] ?? '';
 
   if (KEEP_DOMAIN.has(domain)) return `${user}@${domain}`;
@@ -122,7 +126,7 @@ function splitJid(jid: string): [string, string] {
   return [jid.slice(0, at), jid.slice(at + 1)];
 }
 
-/** Converte um chatId publico (@c.us) para o JID do Baileys (@s.whatsapp.net). */
+/** Converte um chatId do WAHA (@c.us) para o JID do Baileys (@s.whatsapp.net). */
 export function toBaileysJid(chatId: string): string {
   if (!chatId) return '';
   const [localRaw, domain] = splitJid(chatId);
@@ -134,11 +138,12 @@ export function toBaileysJid(chatId: string): string {
 }
 
 // ── Tipo de mensagem ───────────────────────────────────────────────────────
-// O consumidor mapeia payload.type para o seu tipo interno:
-//   image|video|audio|ptt|document|sticker, e qualquer outro vira texto.
+// o tradutor do consumidormapeia payload.type para o message_type interno:
+//   image|video|audio|ptt|document|sticker, e qualquer outro vira 'text'.
 // 'ptt' e o que faz o audio virar voice note. As notificacoes de SISTEMA precisam
-// ser reconheciveis para NAO virarem bolha em branco na conversa — por isso
-// emitimos 'e2e_notification'/'protocol'/'revoked'/'ciphertext' com nomes exatos.
+// cair na lista SYSTEM_TYPES do backend (o tradutor do consumidor) para NAO virarem
+// bolha em branco na conversa — por isso emitimos 'e2e_notification'/'protocol'/
+// 'revoked'/'ciphertext' com esses nomes exatos.
 export type WahaMessageType =
   | 'chat'
   | 'image'
@@ -168,7 +173,7 @@ export function wahaTypeFromMessage(msg: WAMessage): WahaMessageType {
   // evento dedicado `messages.reaction` (ver onReaction no session-manager).
   if (content.reactionMessage) return 'reaction';
 
-  // Mensagem apagada pelo remetente: o consumidor trata 'revoked' como sistema.
+  // Mensagem apagada pelo remetente: o backend trata 'revoked' como sistema.
   if (content.protocolMessage) {
     const t = content.protocolMessage.type;
     // REVOKE = 0 no enum de protocolMessage
@@ -185,11 +190,11 @@ export function wahaTypeFromMessage(msg: WAMessage): WahaMessageType {
     case 'imageMessage':
       return 'image';
     case 'videoMessage':
-      // Video enviado como GIF continua sendo video.
+      // Video enviado como GIF continua sendo video para o backend.
       return 'video';
     case 'audioMessage':
       // ptt=true e voice note; senao e audio comum. Os dois viram message_type
-      // 'audio' pelo consumidor, mas mantemos a distincao por fidelidade ao protocolo.
+      // 'audio' no backend, mas mantemos a distincao por fidelidade ao WAHA.
       return content.audioMessage?.ptt ? 'ptt' : 'audio';
     case 'documentMessage':
     case 'documentWithCaptionMessage':
@@ -220,7 +225,7 @@ function hasUserContent(content: proto.IMessage): boolean {
 }
 
 // ── Corpo da mensagem ──────────────────────────────────────────────────────
-// O consumidor usa `payload.body` como texto (e como caption quando ha midia).
+// o tradutor do consumidor usa `payload.body` como texto (e como caption quando ha midia).
 export function extractBody(msg: WAMessage): string {
   const c = msg.message;
   if (!c) return '';
@@ -257,7 +262,7 @@ export function extractMediaMeta(
 }
 
 // ── Desconexao: logout vs transiente ───────────────────────────────────────
-// A distincao mais importante para a resiliencia. waha-reconnect.js:49 decide:
+// A distincao mais importante para a resiliencia. a maquina de reconexao do consumidor:49 decide:
 //   hasMe === false  -> alert_qr (nunca auto-start; so humano com QR resolve)
 //   hasMe === true   -> start com backoff (queda transiente)
 // Se marcarmos logout como transiente, o gateway entra em loop gerando QR novo.
@@ -280,8 +285,8 @@ export function isImmediateRestart(statusCode: number | null | undefined): boole
 }
 
 // ── Origem do envio (app / WhatsApp Web / nosso gateway) ───────────────────
-// Outros gateways expoem isso como `data.source` ('web'|'android'|'ios') e o consumidor
-// loga esse campo (o consumidor). Serve para o operador distinguir
+// A Evolution expoe isso como `data.source` ('web' | 'android' | 'ios') e o backend
+// loga esse campo (o driver da Evolution). Serve para o operador distinguir
 // "eu respondi pelo consumidor" de "alguem respondeu pelo celular/WhatsApp Web" — sem
 // isso, mensagens enviadas por fora aparecem sem origem identificada.
 //

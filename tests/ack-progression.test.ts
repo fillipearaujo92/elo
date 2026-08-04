@@ -30,7 +30,7 @@ function makeAckPool() {
     async query(sql: string, params: unknown[] = []) {
       const q = sql.replace(/\s+/g, ' ').trim();
 
-      if (q.startsWith('INSERT INTO wa_gateway.sent_messages')) {
+      if (q.startsWith('INSERT INTO elo.sent_messages')) {
         const [, msgId, , ack] = params as [string, string, string, number];
         const prev = store.get(msgId);
 
@@ -52,7 +52,7 @@ function makeAckPool() {
       // recibo, e o teste passava sem nunca exercitar a busca pelo id cru — que e a
       // unica defesa contra o ack sair com @lid. Agora replica a semantica real:
       // `msg_id LIKE '%' || '_<raw>'`, ordenado pela ordem de insercao.
-      if (q.startsWith('SELECT msg_id FROM wa_gateway.sent_messages')) {
+      if (q.startsWith('SELECT msg_id FROM elo.sent_messages')) {
         const sufixo = String((params as unknown[])[1] ?? '');
         const achado = ordem.find((id) => id.endsWith(sufixo));
         // ⚠ LIMITE deste fake, registrado por honestidade: ele nao modela a coluna

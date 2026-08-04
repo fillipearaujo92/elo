@@ -1,6 +1,6 @@
 // tests/features.test.ts
 // Reply (mensagem citada), reactions e deteccao de ORIGEM do envio
-// (app / WhatsApp Web / API) — equivalente ao `data.source` de outro gateway.
+// (app / WhatsApp Web / API) — equivalente ao `data.source` da Evolution.
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
@@ -20,7 +20,7 @@ function msg(over: { id?: string; fromMe?: boolean; message?: Record<string, unk
   } as never;
 }
 
-describe('origem do envio (equivalente ao source de outro gateway)', () => {
+describe('origem do envio (equivalente ao source da Evolution)', () => {
   it('id de 32 hex maiusculos = app mobile', () => {
     assert.equal(detectSource('A5C959F2371C99020F4DE9EEB25435F9', false), 'app');
   });

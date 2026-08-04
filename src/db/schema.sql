@@ -1,27 +1,52 @@
 -- src/db/schema.sql
--- Schema do gateway. Roda no boot (idempotente) — ver src/db/pool.ts:migrate().
+-- Schema do ELO. Roda no boot (idempotente) — ver src/db/pool.ts:migrate().
 --
--- Vive em schema DEDICADO (wa_gateway) e NAO no schema de tenant do consumidor: o
--- gateway e um servico externo, como a gateways de terceiros hoje. Isso tambem evita o
--- vazamento de search_path do PgBouncer em transaction-mode que ja mordeu o projeto.
+-- Vive em schema DEDICADO (`elo`) e nunca no schema da aplicacao que consome o
+-- gateway: o ELO e um servico externo e independente, instalado como a Evolution ou o
+-- WAHA. Isso tambem evita vazamento de search_path quando ha PgBouncer em
+-- transaction-mode no caminho.
 
-CREATE SCHEMA IF NOT EXISTS wa_gateway;
+-- ★ MIGRACAO DE NOME: `wa_gateway` -> `elo`.
+--
+-- O schema se chamava `wa_gateway` nas versoes anteriores. Quem ja tem instalacao
+-- rodando precisa que o rename PRESERVE os dados: em `auth_creds`/`auth_keys` estao as
+-- chaves Signal, e perde-las obriga a reparear todo numero por QR.
+--
+-- `ALTER SCHEMA ... RENAME` e atomico no Postgres e leva tabelas, indices e dados
+-- junto. O bloco roda so quando o antigo existe E o novo ainda nao:
+--   - instalacao antiga -> renomeia, dados intactos
+--   - instalacao nova   -> nao faz nada, o CREATE abaixo cria `elo`
+--   - ja migrada        -> nao faz nada (idempotente, como o resto do arquivo)
+--
+-- O caso dos DOIS existindo fica de fora de proposito: fundir dois schemas exigiria
+-- decidir qual linha vence, e errar isso corromperia o pareamento em silencio.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'wa_gateway')
+     AND NOT EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'elo')
+  THEN
+    ALTER SCHEMA wa_gateway RENAME TO elo;
+    RAISE NOTICE 'ELO: schema wa_gateway renomeado para elo (dados preservados)';
+  END IF;
+END $$;
 
--- Sessoes: uma linha por canal do consumidor. `name` e o identificador tecnico que o
--- backend manda em todo request (channels.identifier — ver wa-provider/index.js:29).
-CREATE TABLE IF NOT EXISTS wa_gateway.sessions (
+CREATE SCHEMA IF NOT EXISTS elo;
+
+-- Sessoes: uma linha por canal. `name` e o identificador tecnico que o
+-- backend manda em todo request (channels.identifier — ver o driver do consumidor).
+CREATE TABLE IF NOT EXISTS elo.sessions (
   -- `name` e o IDENTIFICADOR TECNICO (slug): entra em URL, caminho de midia e
   -- chaves do auth state. Sempre [a-z0-9-]. Continua sendo a PK e o valor que o
-  -- backend do consumidor manda em todo request (channels.identifier).
+  -- sistema consumidor manda em todo request (channels.identifier).
   name          TEXT PRIMARY KEY,
-  -- Ultimo status conhecido (WORKING|STARTING|SCAN_QR_CODE|FAILED|STOPPED).
+  -- Ultimo status conhecido, no vocabulario do WAHA (WORKING|STARTING|SCAN_QR_CODE|FAILED|STOPPED).
   status        TEXT NOT NULL DEFAULT 'STOPPED',
   -- Telefone pareado ("558591218605"). connectionState() do driver expoe como me.id.
   me_id         TEXT,
   me_push_name  TEXT,
   -- config JSONB guarda os webhooks (url, events, customHeaders) e ignore.groups,
-  -- exatamente como a API aceita em POST/PUT /api/sessions. Um cliente
-  -- faz PUT preservando o resto do config (waha.js:173-183), entao guardamos o
+  -- exatamente como o WAHA aceita em POST/PUT /api/sessions. O driver do backend
+  -- faz PUT preservando o resto do config (o driver do consumidor), entao guardamos o
   -- objeto inteiro em vez de colunas separadas.
   config        JSONB NOT NULL DEFAULT '{}'::jsonb,
   -- start=true significa "esta sessao deve estar no ar": usado para restaurar no boot.
@@ -33,9 +58,9 @@ CREATE TABLE IF NOT EXISTS wa_gateway.sessions (
 -- Credenciais do Baileys (o objeto de initAuthCreds, serializado com BufferJSON).
 -- Uma linha por sessao. Separado de `sessions` porque e escrito com frequencia
 -- diferente (creds.update) e nunca precisa ser lido em listagens.
-CREATE TABLE IF NOT EXISTS wa_gateway.auth_creds (
+CREATE TABLE IF NOT EXISTS elo.auth_creds (
   session_name TEXT PRIMARY KEY
-    REFERENCES wa_gateway.sessions(name) ON DELETE CASCADE,
+    REFERENCES elo.sessions(name) ON DELETE CASCADE,
   creds        JSONB NOT NULL,
   updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -44,9 +69,9 @@ CREATE TABLE IF NOT EXISTS wa_gateway.auth_creds (
 -- Chave composta (sessao, tipo, id) — o Baileys pede em lote por tipo+ids
 -- (SignalKeyStore.get(type, ids)), por isso o PK nessa ordem serve o acesso.
 -- Volume: centenas a milhares de linhas por sessao (pre-keys sao consumidas).
-CREATE TABLE IF NOT EXISTS wa_gateway.auth_keys (
+CREATE TABLE IF NOT EXISTS elo.auth_keys (
   session_name TEXT NOT NULL
-    REFERENCES wa_gateway.sessions(name) ON DELETE CASCADE,
+    REFERENCES elo.sessions(name) ON DELETE CASCADE,
   key_type     TEXT NOT NULL,
   key_id       TEXT NOT NULL,
   key_data     JSONB NOT NULL,
@@ -64,9 +89,9 @@ CREATE TABLE IF NOT EXISTS wa_gateway.auth_keys (
 -- o retry fica sem resposta e o app do contato mostra
 -- "Aguardando mensagem / Essa acao pode levar alguns instantes" PARA SEMPRE.
 -- (A doc do Baileys chama isso de "solves the this message can take a while issue".)
-CREATE TABLE IF NOT EXISTS wa_gateway.sent_messages (
+CREATE TABLE IF NOT EXISTS elo.sent_messages (
   session_name TEXT NOT NULL
-    REFERENCES wa_gateway.sessions(name) ON DELETE CASCADE,
+    REFERENCES elo.sessions(name) ON DELETE CASCADE,
   msg_id       TEXT NOT NULL,
   chat_id      TEXT NOT NULL,
   last_ack     SMALLINT NOT NULL DEFAULT 0,
@@ -78,27 +103,27 @@ CREATE TABLE IF NOT EXISTS wa_gateway.sent_messages (
 );
 
 -- Migração para bancos que já tinham a tabela sem a coluna.
-ALTER TABLE wa_gateway.sent_messages ADD COLUMN IF NOT EXISTS content JSONB;
+ALTER TABLE elo.sent_messages ADD COLUMN IF NOT EXISTS content JSONB;
 
 -- `label`: o nome COMO O HUMANO ESCREVEU — espaços, acento, emoji, o que quiser.
 -- Só rótulo de exibição; nunca entra em URL, caminho ou chave. O par
 -- (name = slug técnico, label = texto livre) é o que permite ao operador digitar
 -- "Atacadão Léd — Centro 🏬" sem que nada quebre. Ver src/core/slug.ts.
-ALTER TABLE wa_gateway.sessions ADD COLUMN IF NOT EXISTS label TEXT;
+ALTER TABLE elo.sessions ADD COLUMN IF NOT EXISTS label TEXT;
 
 -- Sessões criadas antes desta coluna: o label passa a ser o próprio name.
-UPDATE wa_gateway.sessions SET label = name WHERE label IS NULL;
+UPDATE elo.sessions SET label = name WHERE label IS NULL;
 
 CREATE INDEX IF NOT EXISTS sent_messages_created_idx
-  ON wa_gateway.sent_messages (created_at);
+  ON elo.sent_messages (created_at);
 
--- Mapa LID -> telefone. Servimos GET /api/{session}/lids/{lid} e o consumidor
--- DEPENDE disso (webhooks/waha.js:63): sem resolver o LID, o contato nasce com o id
+-- Mapa LID -> telefone. GOWS/WAHA expoem GET /api/{session}/lids/{lid} e o backend
+-- DEPENDE disso (o receptor de webhook do consumidor): sem resolver o LID, o contato nasce com o id
 -- oculto no lugar do numero e o consultor nao consegue responder. O Baileys entrega
 -- o par (lid, pn) nos eventos de contato/mensagem; persistimos para servir o endpoint.
-CREATE TABLE IF NOT EXISTS wa_gateway.lid_map (
+CREATE TABLE IF NOT EXISTS elo.lid_map (
   session_name TEXT NOT NULL
-    REFERENCES wa_gateway.sessions(name) ON DELETE CASCADE,
+    REFERENCES elo.sessions(name) ON DELETE CASCADE,
   lid          TEXT NOT NULL,
   phone        TEXT NOT NULL,
   push_name    TEXT,
@@ -107,7 +132,7 @@ CREATE TABLE IF NOT EXISTS wa_gateway.lid_map (
 );
 
 CREATE INDEX IF NOT EXISTS lid_map_phone_idx
-  ON wa_gateway.lid_map (session_name, phone);
+  ON elo.lid_map (session_name, phone);
 
 -- ── Marcos operacionais (chave/valor) ──────────────────────────────────────
 --
@@ -122,7 +147,7 @@ CREATE INDEX IF NOT EXISTS lid_map_phone_idx
 -- Detectar "volume novo" sozinho não serviria: toda instalação nova é um volume
 -- novo, e o aviso viraria ruído ignorado. O sinal útil é a COMBINAÇÃO
 -- "existe pareamento" + "nunca houve backup".
-CREATE TABLE IF NOT EXISTS wa_gateway.marks (
+CREATE TABLE IF NOT EXISTS elo.marks (
   key        TEXT PRIMARY KEY,
   at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   detail     TEXT
@@ -130,6 +155,6 @@ CREATE TABLE IF NOT EXISTS wa_gateway.marks (
 
 -- `db_created`: quando este BANCO nasceu. Um valor recente com sessões antigas é
 -- sinal de volume recriado (restauração, ou troca acidental).
-INSERT INTO wa_gateway.marks (key, detail)
+INSERT INTO elo.marks (key, detail)
 VALUES ('db_created', 'primeiro boot deste banco')
 ON CONFLICT (key) DO NOTHING;

@@ -8,7 +8,7 @@
 //  1. LOGOUT vs QUEDA TRANSIENTE. Em logout (401/403/411) as creds viraram lixo:
 //     limpamos o auth state, zeramos me_id e vamos para SCAN_QR_CODE. Em queda
 //     transiente reconectamos com backoff PRESERVANDO me_id — e assim que o backend
-//     (waha-reconnect.js) distingue "reconecta sozinho" de "chama um humano".
+//     (a maquina de reconexao do consumidor) distingue "reconecta sozinho" de "chama um humano".
 //
 //  2. restartRequired (515) e reconexao IMEDIATA, sem backoff e sem contar tentativa.
 //     Acontece sempre depois do primeiro QR; tratar como falha impede o pareamento.
@@ -383,7 +383,7 @@ export class SessionManager {
 
     const res = await this.pool.query<SessionRow>(
       `SELECT name, status, me_id, me_push_name, config, should_start
-         FROM wa_gateway.sessions WHERE should_start = true`,
+         FROM elo.sessions WHERE should_start = true`,
     );
     this.log.info({ count: res.rows.length }, 'restaurando sessoes');
     for (const row of res.rows) {
@@ -416,13 +416,13 @@ export class SessionManager {
     // a tomar 401 ate os dois lados serem atualizados juntos.
     const cfgLimpo = garantirChaveWebhook(unmaskConfig(cfg ?? {}, atual?.config), !atual);
     const res = await this.pool.query<SessionRow>(
-      // COALESCE no label: um upsert sem label (o caso do backend do Sysled, que
+      // COALESCE no label: um upsert sem label (o caso do sistema consumidor, que
       // só manda o identifier) não apaga o rótulo que o operador já escolheu.
-      `INSERT INTO wa_gateway.sessions (name, label, config, should_start, status)
+      `INSERT INTO elo.sessions (name, label, config, should_start, status)
        VALUES ($1, COALESCE($4, $1), $2::jsonb, $3, 'STOPPED')
        ON CONFLICT (name) DO UPDATE
          SET config = EXCLUDED.config, should_start = EXCLUDED.should_start,
-             label = COALESCE($4, wa_gateway.sessions.label, EXCLUDED.name),
+             label = COALESCE($4, elo.sessions.label, EXCLUDED.name),
              updated_at = NOW()
        RETURNING name, label, status, me_id, me_push_name, config, should_start`,
       [name, JSON.stringify(cfgLimpo), shouldStart, label ?? null],
@@ -448,7 +448,7 @@ export class SessionManager {
     const limpo = unmaskConfig(cfg ?? {}, atual?.config);
 
     const res = await this.pool.query<SessionRow>(
-      `UPDATE wa_gateway.sessions SET config = $2::jsonb, updated_at = NOW()
+      `UPDATE elo.sessions SET config = $2::jsonb, updated_at = NOW()
         WHERE name = $1
         RETURNING name, label, status, me_id, me_push_name, config, should_start`,
       [name, JSON.stringify(limpo)],
@@ -476,7 +476,7 @@ export class SessionManager {
     const res = await this.pool.query<SessionRow>(
       `SELECT name, label, status, me_id, me_push_name, config, should_start,
               created_at, updated_at
-         FROM wa_gateway.sessions
+         FROM elo.sessions
         WHERE name = $1 OR lower(name) = lower($1)
         -- Correspondência exata primeiro: se houver as duas grafias (legado),
         -- a pedida explicitamente ganha.
@@ -490,7 +490,7 @@ export class SessionManager {
     const res = await this.pool.query<SessionRow>(
       `SELECT name, label, status, me_id, me_push_name, config, should_start,
               created_at, updated_at
-         FROM wa_gateway.sessions ORDER BY COALESCE(label, name)`,
+         FROM elo.sessions ORDER BY COALESCE(label, name)`,
     );
     return res.rows;
   }
@@ -596,7 +596,7 @@ export class SessionManager {
     }
 
     const res = await this.pool.query<SessionRow>(
-      `UPDATE wa_gateway.sessions
+      `UPDATE elo.sessions
           SET config = $2::jsonb,
               label = COALESCE($3, label),
               should_start = COALESCE($4, should_start),
@@ -634,9 +634,9 @@ export class SessionManager {
   async stats(): Promise<Record<string, { sent: number; lids: number }>> {
     const res = await this.pool.query<{ session_name: string; sent: string; lids: string }>(
       `SELECT s.name AS session_name,
-              (SELECT count(*) FROM wa_gateway.sent_messages m WHERE m.session_name = s.name) AS sent,
-              (SELECT count(*) FROM wa_gateway.lid_map l WHERE l.session_name = s.name) AS lids
-         FROM wa_gateway.sessions s`,
+              (SELECT count(*) FROM elo.sent_messages m WHERE m.session_name = s.name) AS sent,
+              (SELECT count(*) FROM elo.lid_map l WHERE l.session_name = s.name) AS lids
+         FROM elo.sessions s`,
     );
     const out: Record<string, { sent: number; lids: number }> = {};
     for (const r of res.rows) {
@@ -671,7 +671,7 @@ export class SessionManager {
     if (!row) throw new Error(`sessao nao encontrada: ${name}`);
 
     await this.pool.query(
-      `UPDATE wa_gateway.sessions SET should_start = true, updated_at = NOW() WHERE name = $1`,
+      `UPDATE elo.sessions SET should_start = true, updated_at = NOW() WHERE name = $1`,
       [name],
     );
 
@@ -727,7 +727,7 @@ export class SessionManager {
       await this.setStatus(live, 'STOPPED');
     }
     await this.pool.query(
-      `UPDATE wa_gateway.sessions SET status='STOPPED', should_start=$2, updated_at=NOW()
+      `UPDATE elo.sessions SET status='STOPPED', should_start=$2, updated_at=NOW()
         WHERE name = $1`,
       [name, markShouldStart],
     );
@@ -749,14 +749,14 @@ export class SessionManager {
     forgetSession(name);
     await clearAuthState(this.pool, name);
     // ON DELETE CASCADE limpa auth_keys/auth_creds/sent_messages/lid_map.
-    await this.pool.query(`DELETE FROM wa_gateway.sessions WHERE name = $1`, [name]);
+    await this.pool.query(`DELETE FROM elo.sessions WHERE name = $1`, [name]);
     this.log.info({ session: name }, 'sessao removida');
   }
 
   // ── Estado observavel (o que o driver do backend le) ─────────────────────
 
   /**
-   * Shape consumido por connectionState() em wa-provider/waha.js:106-119:
+   * Shape consumido por connectionState() em o driver do consumidor:
    *   status, me.id, engine.engine, e a presenca de me decide hasMe.
    */
   async describe(name: string): Promise<Record<string, unknown> | null> {
@@ -945,6 +945,22 @@ export class SessionManager {
     const { state, saveCreds } = await usePostgresAuthState(this.pool, live.name);
     const childLog = this.log.child({ session: live.name, gen });
 
+    // ★ Logger SEPARADO para o Baileys, por dois motivos que se somam:
+    //
+    //   1. ORIGEM. Antes o Baileys recebia o `childLog` do gateway, e as linhas dele
+    //      ("uploading pre-keys", "closing stale open session") apareciam
+    //      indistinguiveis das nossas. Quem le o log nao sabia se a mensagem vinha do
+    //      ELO ou da biblioteca — e isso muda completamente o que fazer com ela.
+    //      `lib: 'baileys'` responde isso em toda linha.
+    //   2. VOLUME. O Baileys em `info` narra cada passo de protocolo. Medido no beta:
+    //      afogava o log do gateway. Com nivel proprio (default `warn`), ele aparece
+    //      quando ha algo errado — que e quando se olha para ele.
+    //
+    // O nivel e do CHILD, entao nao afeta o log do gateway: da para rodar o ELO em
+    // `info` e o Baileys em `debug` para depurar protocolo, ou o inverso.
+    const baileysLog = childLog.child({ lib: 'baileys' });
+    baileysLog.level = config.baileysLogLevel;
+
     await this.setStatus(live, 'STARTING');
 
     const sock = makeWASocket({
@@ -952,11 +968,11 @@ export class SessionManager {
         creds: state.creds,
         // Cache das signal keys: sem isso cada operacao de cripto vira query no
         // Postgres e o throughput despenca.
-        keys: makeCacheableSignalKeyStore(state.keys, childLog as never),
+        keys: makeCacheableSignalKeyStore(state.keys, baileysLog as never),
       },
       version: this.waVersion,
       // printQRInTerminal esta deprecado; tratamos o QR no connection.update.
-      logger: childLog as never,
+      logger: baileysLog as never,
 
       // ★ RESOLVE o "Aguardando mensagem / Essa acao pode levar alguns instantes"
       // que aparece no app do destinatario.
@@ -981,7 +997,7 @@ export class SessionManager {
           //   true_207919433941235@lid_3EB0B16E... (sem conteúdo, do retry)
           // O id cru é o único componente estável entre os dois formatos.
           const res = await this.pool.query<{ content: unknown }>(
-            `SELECT content FROM wa_gateway.sent_messages
+            `SELECT content FROM elo.sent_messages
               WHERE session_name = $1
                 AND msg_id LIKE '%' || $2
                 AND content IS NOT NULL
@@ -1031,7 +1047,7 @@ export class SessionManager {
       // aparecer em ciclos consecutivos. Fixando em 20s o intervalo fica uniforme
       // e o painel (que agora usa o `qrAt` real) acompanha sem adivinhar.
       qrTimeout: 20_000,
-      // Sem sincronizar historico completo: o Sysled nao usa e o payload e enorme.
+      // Sem sincronizar historico completo: o consumidor nao usa e o payload e enorme.
       syncFullHistory: false,
       // markOnlineOnConnect=false evita roubar as notificacoes do celular do cliente.
       markOnlineOnConnect: false,
@@ -1112,7 +1128,7 @@ export class SessionManager {
     // ★ REAÇÕES RECEBIDAS vêm num evento DEDICADO, não em messages.upsert.
     // Doc do Baileys: "message was reacted to. If reaction was removed — then
     // reaction.text will be falsey". Sem escutar isto, a reação do cliente nunca
-    // chegava ao Sysled (o consultor não via nada).
+    // chegava ao consumidor (o consultor não via nada).
     // ★ Presenca do CONTATO: 'digitando…', online, visto por ultimo.
     //
     // Chega so para chats assinados (presenceSubscribe) e so se o contato
@@ -1199,7 +1215,7 @@ export class SessionManager {
 
     if (qr) {
       // O driver do backend busca GET /api/{s}/auth/qr esperando PNG base64
-      // (waha.js:225-232 documenta que `?format=raw` quebrava o <img src>).
+      // (o driver do consumidordocumenta que `?format=raw` quebrava o <img src>).
       live.qr = await QRCode.toDataURL(qr, { margin: 1, width: 512 });
       // Instante de emissão: o painel calcula a idade real a partir daqui, em vez
       // de cronometrar por conta própria e dessincronizar do WhatsApp.
@@ -1220,7 +1236,7 @@ export class SessionManager {
         live.meId = (normalized.split('@')[0] ?? '').split(':')[0] ?? null;
         live.mePushName = live.sock?.user?.name ?? null;
         await this.pool.query(
-          `UPDATE wa_gateway.sessions
+          `UPDATE elo.sessions
               SET me_id=$2, me_push_name=$3, updated_at=NOW() WHERE name=$1`,
           [live.name, live.meId, live.mePushName],
         );
@@ -1281,7 +1297,7 @@ export class SessionManager {
           );
         }
         await this.pool.query(
-          `UPDATE wa_gateway.sessions SET me_id=NULL, me_push_name=NULL, updated_at=NOW()
+          `UPDATE elo.sessions SET me_id=NULL, me_push_name=NULL, updated_at=NOW()
             WHERE name=$1`,
           [live.name],
         );
@@ -1478,7 +1494,7 @@ export class SessionManager {
     }
 
     // Reacao NAO e conversa: quem a trata e o evento dedicado `messages.reaction`
-    // (onReaction). Se emitissemos aqui tambem, o Sysled receberia a reacao DUAS
+    // (onReaction). Se emitissemos aqui tambem, o consumidor receberia a reacao DUAS
     // vezes — uma como reacao e outra como bolha de mensagem (bug relatado:
     // "o reaction do consultor mostra para o cliente junto com uma mensagem").
     if (type === 'reaction') {
@@ -1589,7 +1605,7 @@ export class SessionManager {
    * reagiu. Texto vazio/ausente = a pessoa REMOVEU a reação.
    *
    * Emitimos como evento `message` com payload.reaction — o shape que o
-   * waha-translate do backend converte em kind='reaction' para aplicar na
+   * o tradutor do consumidor converte em kind='reaction' para aplicar na
    * mensagem alvo em vez de criar bolha nova.
    */
   private async onReaction(
@@ -1684,7 +1700,7 @@ export class SessionManager {
    *
    * O Baileys entrega isso em `message-receipt.update` — NÃO em `messages.update`.
    * Escutar só o segundo era o bug: toda mensagem enviada ficava presa em 'sent'
-   * (um tique) e a UI do Sysled mostrava ícone de falha mesmo após a entrega.
+   * (um tique) e a UI do consumidor mostrava ícone de falha mesmo após a entrega.
    *
    * Mapeamento dos timestamps para a escala de ack do WAHA:
    *   playedTimestamp  -> 3 (read)      áudio ouvido
@@ -1741,7 +1757,7 @@ export class SessionManager {
         //
         // `ORDER BY created_at ASC` continua garantindo que, havendo duas linhas para o
         // mesmo id cru, ganha a do ENVIO (criada primeiro) e nao a do ack.
-        `SELECT msg_id FROM wa_gateway.sent_messages
+        `SELECT msg_id FROM elo.sent_messages
           WHERE session_name = $1 AND msg_id LIKE '%' || $2
           ORDER BY created_at ASC LIMIT 1`,
         [session, `_${rawId}`],
@@ -1771,7 +1787,7 @@ export class SessionManager {
    *      receipt. Com o teto de retenção purgando por idade, o lixo competia com o que
    *      importa.
    *   2. O gateway emitia webhook `message.ack` para mensagem que o consumidor NUNCA
-   *      enviou. O Sysled procura o id, não acha (ou pior, acha a mensagem inbound) e
+   *      enviou. O consumidor procura o id, não acha (ou pior, acha a mensagem inbound) e
    *      gasta uma query por evento à toa.
    *   3. Ruído: `elo_ack_read_total` contava 1014 leituras que não eram das nossas
    *      mensagens, tornando a métrica inútil para responder "as minhas mensagens estão
@@ -1825,16 +1841,16 @@ export class SessionManager {
     // posterior nunca chegaria ao backend (consultor veria msg como enviada sem ter
     // sido). Failed e um ESTADO TERMINAL, nao um retrocesso: passa sempre, exceto
     // repeticao do proprio failed. O backend tem a guarda simetrica: delivered/read
-    // vencem failed, e failed so sobrescreve sent/NULL (webhooks/waha.js:172-174).
+    // vencem failed, e failed so sobrescreve sent/NULL (o receptor de webhook do consumidor).
     const isFailed = ack < 0;
     const res = await this.pool.query<{ last_ack: number }>(
-      `INSERT INTO wa_gateway.sent_messages (session_name, msg_id, chat_id, last_ack)
+      `INSERT INTO elo.sent_messages (session_name, msg_id, chat_id, last_ack)
        VALUES ($1, $2, $3, $4)
        ON CONFLICT (session_name, msg_id) DO UPDATE
          SET last_ack = EXCLUDED.last_ack, updated_at = NOW()
          WHERE ${isFailed
-           ? 'wa_gateway.sent_messages.last_ack >= 0'
-           : 'EXCLUDED.last_ack > wa_gateway.sent_messages.last_ack'}
+           ? 'elo.sent_messages.last_ack >= 0'
+           : 'EXCLUDED.last_ack > elo.sent_messages.last_ack'}
        RETURNING last_ack`,
       [live.name, msgId, toWahaChatId(chatId), ack],
     );
@@ -1884,11 +1900,11 @@ export class SessionManager {
     if (!lid || !phone) return;
     await this.pool
       .query(
-        `INSERT INTO wa_gateway.lid_map (session_name, lid, phone, push_name, updated_at)
+        `INSERT INTO elo.lid_map (session_name, lid, phone, push_name, updated_at)
          VALUES ($1, $2, $3, $4, NOW())
          ON CONFLICT (session_name, lid) DO UPDATE
            SET phone = EXCLUDED.phone,
-               push_name = COALESCE(EXCLUDED.push_name, wa_gateway.lid_map.push_name),
+               push_name = COALESCE(EXCLUDED.push_name, elo.lid_map.push_name),
                updated_at = NOW()`,
         [session, lid, phone, pushName ?? null],
       )
@@ -1905,7 +1921,7 @@ export class SessionManager {
   /** Resolve LID -> telefone para GET /api/{s}/lids/{lid}. */
   async resolveLid(session: string, lid: string): Promise<{ phone: string; pushName: string | null } | null> {
     const res = await this.pool.query<{ phone: string; push_name: string | null }>(
-      `SELECT phone, push_name FROM wa_gateway.lid_map
+      `SELECT phone, push_name FROM elo.lid_map
         WHERE session_name = $1 AND lid = $2`,
       [session, lid],
     );
@@ -1961,7 +1977,7 @@ export class SessionManager {
    * a linha, ele não achava nada, caía no endereço do recibo e criava uma linha NOVA
    * `true_<lid>@lid_<raw>` em vez de atualizar a do envio.
    *
-   * Efeito no consumidor: a mensagem original ficava em ack=2 para sempre e o Sysled
+   * Efeito no consumidor: a mensagem original ficava em ack=2 para sempre e o consumidor
    * mostrava "presa em enviada" mesmo com a mensagem entregue E LIDA no celular — que é
    * exatamente o sintoma que o Filipe relatou no beta.
    *
@@ -1982,10 +1998,10 @@ export class SessionManager {
         // COALESCE no content: um upsert SEM conteúdo (ex.: reação, que não tem corpo
         // guardável) não pode APAGAR o conteúdo que já estava lá de um envio anterior
         // com o mesmo id.
-        `INSERT INTO wa_gateway.sent_messages (session_name, msg_id, chat_id, last_ack, content)
+        `INSERT INTO elo.sent_messages (session_name, msg_id, chat_id, last_ack, content)
          VALUES ($1, $2, $3, 0, $4::jsonb)
          ON CONFLICT (session_name, msg_id) DO UPDATE
-           SET content = COALESCE(EXCLUDED.content, wa_gateway.sent_messages.content),
+           SET content = COALESCE(EXCLUDED.content, elo.sent_messages.content),
                updated_at = NOW()`,
         [
           session,
@@ -2025,7 +2041,7 @@ export class SessionManager {
     const raw = String(msgIdOrRaw).split('_').pop() ?? '';
     if (!raw) return null;
     const res = await this.pool.query<{ content: unknown; chat_id: string }>(
-      `SELECT content, chat_id FROM wa_gateway.sent_messages
+      `SELECT content, chat_id FROM elo.sent_messages
         WHERE session_name = $1
           AND msg_id LIKE '%' || $2
           AND content IS NOT NULL
@@ -2046,7 +2062,7 @@ export class SessionManager {
   /**
    * URL da foto de perfil do contato. Equivale ao
    * `chat/fetchProfilePictureUrl` da Evolution e ao `/contacts/profile-picture`
-   * do WAHA — o Sysled usa isso para o avatar do contato (jobs/avatar-sync.js).
+   * do WAHA — o consumidor usa isso para o avatar do contato (jobs/avatar-sync.js).
    *
    * A URL é do CDN do WhatsApp e expira; quem consome deve baixar, não guardar.
    * `null` quando o contato não tem foto ou restringiu por privacidade.
@@ -2079,7 +2095,7 @@ export class SessionManager {
     live.status = status;
 
     await this.pool
-      .query(`UPDATE wa_gateway.sessions SET status=$2, updated_at=NOW() WHERE name=$1`, [
+      .query(`UPDATE elo.sessions SET status=$2, updated_at=NOW() WHERE name=$1`, [
         live.name,
         status,
       ])
@@ -2152,7 +2168,7 @@ export class SessionManager {
     if (nomes.length) {
       await this.pool
         .query(
-          `UPDATE wa_gateway.sessions SET status='STOPPED', updated_at=NOW()
+          `UPDATE elo.sessions SET status='STOPPED', updated_at=NOW()
             WHERE name = ANY($1::text[]) AND status <> 'STOPPED'`,
           [nomes],
         )

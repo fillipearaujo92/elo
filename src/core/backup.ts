@@ -51,7 +51,7 @@ export interface BackupStatus {
 /** Lê um marco. */
 async function mark(pool: Pool, key: string): Promise<string | null> {
   const r = await pool
-    .query<{ at: string }>(`SELECT at FROM wa_gateway.marks WHERE key = $1`, [key])
+    .query<{ at: string }>(`SELECT at FROM elo.marks WHERE key = $1`, [key])
     .catch(() => ({ rows: [] as Array<{ at: string }> }));
   return r.rows[0]?.at ?? null;
 }
@@ -60,7 +60,7 @@ async function mark(pool: Pool, key: string): Promise<string | null> {
 export async function setMark(pool: Pool, key: string, detail?: string): Promise<void> {
   await pool
     .query(
-      `INSERT INTO wa_gateway.marks (key, at, detail) VALUES ($1, NOW(), $2)
+      `INSERT INTO elo.marks (key, at, detail) VALUES ($1, NOW(), $2)
        ON CONFLICT (key) DO UPDATE SET at = NOW(), detail = EXCLUDED.detail`,
       [key, detail ?? null],
     )
@@ -78,8 +78,8 @@ export async function backupStatus(pool: Pool): Promise<BackupStatus> {
   const s = await pool.query<{ total: string; paired: string; ultima: string | null }>(
     `SELECT count(*) AS total,
             count(*) FILTER (WHERE me_id IS NOT NULL) AS paired,
-            (SELECT max(updated_at)::text FROM wa_gateway.auth_creds) AS ultima
-       FROM wa_gateway.sessions`,
+            (SELECT max(updated_at)::text FROM elo.auth_creds) AS ultima
+       FROM elo.sessions`,
   );
   const paired = Number(s.rows[0]?.paired ?? 0);
   const sessions = Number(s.rows[0]?.total ?? 0);
@@ -121,7 +121,7 @@ export async function backupStatus(pool: Pool): Promise<BackupStatus> {
 export async function dumpAuth(pool: Pool): Promise<Record<string, unknown>> {
   const dados: Record<string, unknown[]> = {};
   for (const t of TABELAS) {
-    const r = await pool.query(`SELECT * FROM wa_gateway.${t}`);
+    const r = await pool.query(`SELECT * FROM elo.${t}`);
     dados[t] = r.rows;
   }
   return {
@@ -158,7 +158,7 @@ export async function restoreAuth(
     await client.query('BEGIN');
     // Ordem inversa para apagar (respeita as FKs), direta para inserir.
     for (const t of [...TABELAS].reverse()) {
-      await client.query(`DELETE FROM wa_gateway.${t}`);
+      await client.query(`DELETE FROM elo.${t}`);
     }
     for (const t of TABELAS) {
       const linhas = data[t] ?? [];
@@ -168,7 +168,7 @@ export async function restoreAuth(
         const vals = cols.map((c) => (linha as Record<string, unknown>)[c]);
         const ph = cols.map((_, i) => `$${i + 1}`).join(', ');
         await client.query(
-          `INSERT INTO wa_gateway.${t} (${cols.map((c) => `"${c}"`).join(', ')})
+          `INSERT INTO elo.${t} (${cols.map((c) => `"${c}"`).join(', ')})
            VALUES (${ph}) ON CONFLICT DO NOTHING`,
           vals.map((v) =>
             // JSONB volta do JSON como objeto; o driver precisa de string.

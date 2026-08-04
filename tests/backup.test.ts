@@ -38,16 +38,16 @@ function makePool(opts: {
           }],
         };
       }
-      if (q.startsWith('SELECT at FROM wa_gateway.marks')) {
+      if (q.startsWith('SELECT at FROM elo.marks')) {
         const k = params[0] as string;
         return { rows: marks[k] ? [{ at: marks[k] }] : [] };
       }
-      if (q.startsWith('INSERT INTO wa_gateway.marks')) {
+      if (q.startsWith('INSERT INTO elo.marks')) {
         marks[params[0] as string] = new Date().toISOString();
         return { rows: [] };
       }
-      if (q.startsWith('SELECT * FROM wa_gateway.')) {
-        const t = q.replace('SELECT * FROM wa_gateway.', '').trim();
+      if (q.startsWith('SELECT * FROM elo.')) {
+        const t = q.replace('SELECT * FROM elo.', '').trim();
         return { rows: opts.tabelas?.[t] ?? [] };
       }
       return { rows: [] };
@@ -190,7 +190,7 @@ describe('restoreAuth', () => {
       data: { sessions: [{ name: 'canal' }], auth_creds: [], auth_keys: [], lid_map: [] },
     });
     const deletes = pool.escritas.filter((e) => e.sql.startsWith('DELETE FROM'))
-      .map((e) => e.sql.replace('DELETE FROM wa_gateway.', ''));
+      .map((e) => e.sql.replace('DELETE FROM elo.', ''));
     // lid_map depende de sessions: apagar sessions primeiro violaria a FK.
     assert.deepEqual(deletes, ['lid_map', 'auth_keys', 'auth_creds', 'sessions']);
   });
@@ -204,7 +204,7 @@ describe('restoreAuth', () => {
         auth_creds: [], auth_keys: [], lid_map: [],
       },
     });
-    const ins = pool.escritas.find((e) => e.sql.includes('INSERT INTO wa_gateway.sessions'))!;
+    const ins = pool.escritas.find((e) => e.sql.includes('INSERT INTO elo.sessions'))!;
     const cfg = ins.params.find((p) => typeof p === 'string' && p.startsWith('{'));
     assert.ok(cfg, 'o config tem de ir como STRING JSON');
   });

@@ -56,7 +56,7 @@ export async function purgeSentMessages(pool: Pool, retentionDays: number): Prom
   // `make_interval` em vez de interpolar a string do intervalo: o valor vem de
   // variavel de ambiente e nao deve entrar na SQL como texto.
   const r = await pool.query(
-    `DELETE FROM wa_gateway.sent_messages
+    `DELETE FROM elo.sent_messages
       WHERE created_at < NOW() - make_interval(days => $1::int)`,
     [Math.floor(retentionDays)],
   );

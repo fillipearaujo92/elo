@@ -1,14 +1,14 @@
 // src/core/webhook.ts
 //
-// Emissor de webhooks no formato WAHA. O consumidor e POST /webhook/waha do backend
-// (sysled-chat-typescript/backend/webhooks/waha.js), que:
+// Emissor de webhooks no formato WAHA. O consumidor e o endpoint de webhook que o consumidor expoe
+// (waha.js), que:
 //   1. exige `session` no corpo (401 sem isso);
 //   2. exige o header X-Webhook-Key igual a waha.api_key (fail-closed 401);
 //   3. passa o corpo inteiro por translateWahaEvent().
 //
 // Entrega: retry com backoff. O backend responde 200 rapido e processa async, mas
 // pode estar reiniciando (deploy) — perder uma mensagem inbound e inaceitavel, e o
-// WAHA real tambem faz retry (o driver configura retries: 15x/2s, ver waha.js:196).
+// WAHA real tambem faz retry (o driver configura retries: 15x/2s, ver o driver do consumidor).
 
 import type { Logger } from 'pino';
 import { events } from './events.js';
@@ -102,7 +102,7 @@ export class WebhookEmitter {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     // customHeaders e o mecanismo pelo qual o backend recebe X-Webhook-Key. Sem
     // isso, TODA mensagem inbound toma 401 e desaparece silenciosamente — bug ja
-    // vivido em producao com o WAHA (documentado em waha.js:188-191).
+    // vivido em producao com o WAHA (documentado em o driver do consumidor).
     for (const h of w.customHeaders ?? []) {
       if (h?.name) headers[h.name] = h.value ?? '';
     }

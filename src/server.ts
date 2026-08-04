@@ -19,7 +19,8 @@ import { registerSessionRoutes } from './routes/sessions.js';
 import { inc, renderPrometheus } from './core/metrics.js';
 import { backupStatus, dumpAuth, restoreAuth, setMark } from './core/backup.js';
 import { startJanitor } from './core/janitor.js';
-import { isAuthorized, isPublicPath } from './core/access.js';
+import { deveLogarRequisicao, isAuthorized, isPublicPath } from './core/access.js';
+import { buildLoggerOptions } from './core/log-options.js';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import { buildOpenApi } from './openapi.js';
@@ -38,38 +39,18 @@ export const VERSION = pkg.version ?? '0.0.0';
 export const COMMIT = process.env.COMMIT_SHA ?? null;
 
 const app = Fastify({
-  logger: {
+  // As opcoes do logger vivem em core/log-options.ts (funcao pura, testada). Estavam
+  // inline aqui e o server.ts nao e importavel em teste — reverter `formatters.level`
+  // para o numero deixava a suite 100% verde. Medido por mutacao.
+  logger: buildLoggerOptions({
     level: config.logLevel,
-    // ★ Sem `redact`, havia vazamento CONCRETO: core/webhook.ts loga `url: w.url` em
-    // erro e em esgotamento de tentativas, e URL de webhook com token embutido
-    // (`https://host/hook?token=...` ou `https://user:senha@host/hook`) ia para o log
-    // em texto puro. Log costuma ser o lugar menos protegido da instalacao — vai para
-    // arquivo, para o journald, e para qualquer coletor.
-    //
-    // `censor` explicito em vez de remover a chave: ver `[oculto]` no log diz que o
-    // campo EXISTE e foi escondido; um campo ausente parece bug de instrumentacao.
-    // ★ Os paths sao CIRURGICOS, e isso foi medido. A primeira versao usava `url` e
-    // `*.url` genericos — e o teste com pino real mostrou que isso censura tambem
-    // `req.url`, o caminho da requisicao no log de acesso. Ou seja: cegava o
-    // diagnostico ("qual rota deu erro?") para esconder algo que nao e segredo.
-    // Protecao que apaga evidencia legitima acaba sendo desligada pelo operador.
-    redact: {
-      paths: [
-        'req.headers["x-api-key"]',
-        'req.headers["X-Api-Key"]',
-        'headers["x-api-key"]',
-        // URL de webhook, caso alguem volte a logar o objeto cru. A defesa PRINCIPAL e
-        // `urlSegura()` em core/webhook.ts, que sanitiza na origem — ver
-        // tests/segredo-em-log.test.ts. Estes paths sao a rede embaixo dela.
-        'w.url',
-        'webhook.url',
-        // Valor de header customizado — e por padrao a chave do webhook.
-        '*.customHeaders[*].value',
-        'config.webhooks[*].customHeaders[*].value',
-      ],
-      censor: '[oculto]',
-    },
-  },
+    version: VERSION,
+    commit: COMMIT,
+  }),
+  // ★ Log de requisicao SOB CONTROLE PROPRIO (ver os hooks logo abaixo). O Fastify nao
+  // permite filtrar o log de acesso por rota, e o par de linhas que ele emite para cada
+  // /health do healthcheck do Docker era a maior fonte de ruido medida no beta.
+  disableRequestLogging: true,
   // Midia em base64 no corpo (o driver manda `file.data`) estoura o default de 1MB.
   bodyLimit: 64 * 1024 * 1024,
   // Confia no proxy (Traefik) para logar o IP real.
@@ -207,6 +188,45 @@ limpezaAuth.unref?.();
 // server.ts nao tinha teste nenhum e os testes de rota recriavam o hook A MAO — o
 // que os testes exercitavam nao era o que producao rodava. Foi assim que os assets
 // do Swagger ficaram em 401 com o CI verde.
+// ── Log de acesso ──────────────────────────────────────────────────────────
+//
+// Substitui o log automatico do Fastify (desligado em `disableRequestLogging`) por
+// UMA linha por requisicao, no fim, com o resultado.
+//
+// Por que UMA e nao duas: o par "incoming request" + "request completed" dobra o
+// volume sem acrescentar informacao — a linha final ja tem metodo, rota, status e
+// duracao. A linha de abertura so serviria para requisicao que NUNCA termina, e para
+// essas o sinal esta na ausencia da linha final.
+//
+// ★ E o filtro das rotas de health, que e o motivo desta troca. MEDIDO no beta: o
+// healthcheck do Docker (a cada 30s) produzia 2 de cada 3 linhas do container,
+// empurrando webhook perdido e mensagem nao decifrada fora do buffer do `docker logs`.
+// Health que responde 200 nao e informacao; health que responde OUTRA coisa e — e essa
+// CONTINUA sendo logada, porque o filtro so vale para status < 400.
+// A regra vive em core/access.ts (funcao pura, testada) e NAO e repetida aqui — a
+// mesma licao dos assets do Swagger em 401: regra inline num hook do server.ts e regra
+// que nenhum teste exercita.
+app.addHook('onResponse', async (req, reply) => {
+  const status = reply.statusCode;
+  if (!deveLogarRequisicao(req.url, status, config.logHealthRequests)) return;
+
+  const dados = {
+    method: req.method,
+    // `routeOptions.url` e o PADRAO da rota ("/api/sessions/:name"), nao a URL
+    // concreta — agrupa no coletor em vez de virar uma serie por sessao. Nome de sessao
+    // identifica cliente (e a razao de /metrics ser protegido), entao ele nao entra aqui.
+    route: req.routeOptions?.url ?? req.url.split('?')[0],
+    status,
+    ms: Math.round(reply.elapsedTime),
+    ip: req.ip,
+  };
+  // Nivel PELO STATUS: 5xx e falha do gateway, 4xx e do chamador. E isso que faz
+  // `grep '"level":"error"'` devolver problema de verdade em vez de nada.
+  if (status >= 500) req.log.error(dados, 'requisicao falhou');
+  else if (status >= 400) req.log.warn(dados, 'requisicao rejeitada');
+  else req.log.info(dados, 'requisicao');
+});
+
 app.addHook('onRequest', async (req, reply) => {
   if (isPublicPath(req.url)) return;
   if (!isAuthorized(req.headers['x-api-key'], config.apiKey)) {
@@ -524,7 +544,7 @@ app.get<{ Params: { session: string; filename: string } }>(
   async (req, reply) => {
     const buf = await media.read(req.params.session, req.params.filename);
     if (!buf) return reply.code(404).send({ message: 'arquivo nao encontrado' });
-    // O backend le o content-type da resposta para decidir a extensao (waha.js:260).
+    // O backend le o content-type da resposta para decidir a extensao (o driver do consumidor).
     return reply.type(guessType(req.params.filename)).send(buf);
   },
 );

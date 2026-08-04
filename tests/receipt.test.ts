@@ -23,7 +23,7 @@ function makePool() {
   const store = new Map<string, number>();
   const pool = {
     async query(sql: string, params: unknown[] = []) {
-      if (sql.replace(/\s+/g, ' ').includes('INSERT INTO wa_gateway.sent_messages')) {
+      if (sql.replace(/\s+/g, ' ').includes('INSERT INTO elo.sent_messages')) {
         const [, msgId, , ack] = params as [string, string, string, number];
         const prev = store.get(msgId);
         if (prev === undefined) {
@@ -84,7 +84,7 @@ describe('message-receipt.update (ACK de mensagem enviada)', () => {
   it('REGRESSAO: receiptTimestamp emite ack delivered', () => {
     // Sem este handler, NENHUM ack era emitido e a msg ficava presa em 'sent'.
     return feedReceipt({ receiptTimestamp: 1785331000 }).then(() => {
-      assert.deepEqual(acks(), [2], 'delivered = ack 2 na escala desta API');
+      assert.deepEqual(acks(), [2], 'delivered = ack 2 na escala do WAHA');
     });
   });
 

@@ -1,8 +1,8 @@
 // src/core/media.ts
 //
 // Midia inbound: baixa/descriptografa via Baileys e grava em disco, servindo por
-// GET /api/files/{session}/{arquivo}. O consumidor baixa dessa URL e move
-// para o storage dele (S3/MinIO) — o consumidor deve fazer retry no download.
+// GET /api/files/{session}/{arquivo}. O sistema consumidor baixa dessa URL e move
+// para o storage dele (S3/MinIO) — ver o download de midia do driver, que ja faz retry.
 //
 // Guardamos em disco local (volume do container) por simplicidade: e cache de
 // transito, nao storage definitivo. O backend e a fonte da verdade da midia.

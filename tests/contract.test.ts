@@ -3,11 +3,11 @@
 // CONTRACT TESTS — a validacao mais importante do repo.
 //
 // Em vez de reimplementar o que o backend espera (e arriscar divergir), estes testes
-// importam o tradutor REAL do backend (backend/lib/wa-provider/waha-translate.js) e
+// importam o tradutor REAL do backend (o tradutor do consumidor) e
 // passam os payloads que o gateway produz por ele. Se o shape divergir, quebra aqui
 // e nao em producao.
 //
-// O caminho do backend vem de SYSLED_BACKEND_PATH. Sem a variavel (o caso de quem
+// O caminho do backend vem de ELO_CONSUMER_BACKEND. Sem a variavel (o caso de quem
 // so quer rodar o gateway), os testes sao SKIPPADOS com aviso — nao falham
 // silenciosamente nem passam mascarando ausencia de verificacao.
 
@@ -24,18 +24,28 @@ import { baileysStatusToWahaAck } from '../dist/core/waha-compat.js';
 // Sem default de caminho absoluto: o antigo apontava para a maquina de um dev
 // especifico, o que nao faz sentido em nenhum outro clone. Sem a variavel, os
 // testes de contrato sao SKIPPADOS com aviso (ver abaixo) — que e o certo para
-// quem nao tem o consumidor a mao.
-const BACKEND = process.env.SYSLED_BACKEND_PATH ?? '';
+// quem nao tem o sistema consumidor a mao.
+// ELO_CONSUMER_BACKEND: caminho do backend que CONSOME o gateway. O nome nao cita
+// consumidor especifico — o ELO e independente e qualquer sistema pode ocupar esse
+// lugar. SYSLED_BACKEND_PATH segue aceito para nao quebrar ambiente ja montado.
+const BACKEND = process.env.ELO_CONSUMER_BACKEND ?? process.env.SYSLED_BACKEND_PATH ?? '';
 
+// ★ Nomes de ARQUIVO, nao descricao. Uma substituicao de prosa trocou estes dois
+// caminhos por "o tradutor do consumidor"/"a maquina de reconexao do consumidor" — o
+// existsSync passava a falhar sempre e os testes de contrato ficavam PERMANENTEMENTE
+// skippados, com o aviso parecendo "voce nao configurou" em vez de "o caminho esta
+// quebrado". O arquivo se chama a si mesmo de validacao mais importante do repo, e
+// estava desligado sem ninguem notar. Nao substituir estes literais por descricao.
 const translatePath = BACKEND ? join(BACKEND, 'lib/wa-provider/waha-translate.js') : '';
 const reconnectPath = BACKEND ? join(BACKEND, 'lib/wa-provider/waha-reconnect.js') : '';
 const hasBackend = !!BACKEND && existsSync(translatePath) && existsSync(reconnectPath);
 
 if (!hasBackend) {
   console.warn(
-    '[contract] testes de contrato SKIPPADOS (integracao com o consumidor Chat).\n' +
-      '  Sao opcionais: validam que os payloads casam com o tradutor do backend do\n' +
-      '  o consumidor. Para rodar, aponte SYSLED_BACKEND_PATH para o diretorio backend/.',
+    '[contract] testes de contrato SKIPPADOS (integracao com o sistema consumidor).\n' +
+      '  Sao opcionais: validam que os payloads do gateway casam com o tradutor do\n' +
+      '  sistema que o consome. Para rodar, aponte ELO_CONSUMER_BACKEND para o\n' +
+      '  diretorio backend/ desse sistema.',
   );
 }
 
@@ -197,7 +207,7 @@ describe('contrato: evento message', { skip: !hasBackend }, () => {
 });
 
 describe('contrato: evento message.ack', { skip: !hasBackend }, () => {
-  // A escala desta API e a do Baileys NAO coincidem. Este teste trava a conversao:
+  // A escala do WAHA e a do Baileys NAO coincidem. Este teste trava a conversao:
   // SERVER_ACK do Baileys e apenas 'sent' — trata-lo como 'delivered' mostraria
   // dois ticks para o consultor com a mensagem ainda nao entregue.
   const cases: Array<[string, number, string]> = [
