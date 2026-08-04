@@ -5,7 +5,7 @@
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import Fastify from 'fastify';
+import Fastify, { LogController } from 'fastify';
 import { config } from './config.js';
 import { events } from './core/events.js';
 import { MediaStore } from './core/media.js';
@@ -47,10 +47,17 @@ const app = Fastify({
     version: VERSION,
     commit: COMMIT,
   }),
-  // ★ Log de requisicao SOB CONTROLE PROPRIO (ver os hooks logo abaixo). O Fastify nao
-  // permite filtrar o log de acesso por rota, e o par de linhas que ele emite para cada
-  // /health do healthcheck do Docker era a maior fonte de ruido medida no beta.
-  disableRequestLogging: true,
+  // ★ Log de requisicao SOB CONTROLE PROPRIO (ver o hook onResponse abaixo). O par de
+  // linhas que o Fastify emite por requisicao ("incoming request" + "request completed")
+  // nao da para filtrar por rota, e o healthcheck do Docker batendo em /health a cada
+  // 30s era a maior fonte de ruido medida no beta.
+  //
+  // `logController` e nao `disableRequestLogging: true`: a opcao de topo esta DEPRECADA
+  // no Fastify 5 (FSTDEP023, avisado no boot — visto no log do beta) e sai no Fastify 6.
+  // A classe tambem e o unico jeito de silenciar os caminhos que nao passam pelo hook:
+  // `routeNotFound` e `defaultErrorLog`, que o Fastify loga por conta propria — e que
+  // logam 4xx em `info`, contra o `warn` que este gateway usa.
+  logController: new LogController({ disableRequestLogging: true }),
   // Midia em base64 no corpo (o driver manda `file.data`) estoura o default de 1MB.
   bodyLimit: 64 * 1024 * 1024,
   // Confia no proxy (Traefik) para logar o IP real.
