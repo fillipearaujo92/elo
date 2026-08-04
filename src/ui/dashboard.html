@@ -393,16 +393,109 @@ a{color:inherit;text-decoration:none}
    de erro (vazia na maior parte do tempo), então separava o botão de nada.
    Agora é um cartão contido e centrado — a borda delimita a superfície, em vez
    de riscar o meio dela. */
+/* ── Tela de entrada: HUD técnico ──────────────────────────────────────────
+   A direção é "instrumento de infraestrutura", não "app bonito": o ELO é a peça
+   que fala o protocolo do WhatsApp, e a tela de entrada é a primeira impressão
+   de precisão. Daí grade de coordenadas, tipografia monoespaçada, cantos
+   marcados como visor, e o dado técnico (versão, commit, engine) tratado como
+   telemetria em vez de rodapé decorativo.
+
+   ★ O que NÃO entra: nada que exija dado autenticado. A tela de login é pública
+   (ver PUBLIC_PATHS em core/access.ts), então contagem de sessões ou nome de
+   canal como "telemetria" vazaria informação de operação para quem não tem a
+   chave. O rodapé mostra só o que /health já expõe sem credencial. */
 .lg{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px;
+  position:relative;overflow:hidden;
   /* Halo sutil atrás do cartão: dá profundidade sem pesar o fundo. */
   background:
     radial-gradient(ellipse 620px 420px at 50% 42%, var(--sig-dim), transparent 70%),
     var(--ink)}
+/* Grade de coordenadas. `background-image` com dois gradientes repetidos é ~50x
+   mais leve que desenhar as linhas em SVG ou canvas, e o navegador a compõe numa
+   camada só. A máscara radial apaga a grade nas beiradas: sem ela, a tela vira
+   papel quadriculado e o cartão perde o foco. */
+.lg::before{
+  content:'';position:absolute;inset:0;pointer-events:none;
+  background-image:
+    linear-gradient(to right, rgba(74,222,128,.055) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(74,222,128,.055) 1px, transparent 1px);
+  background-size:46px 46px;
+  -webkit-mask:radial-gradient(ellipse 70% 60% at 50% 45%,#000 20%,transparent 78%);
+          mask:radial-gradient(ellipse 70% 60% at 50% 45%,#000 20%,transparent 78%);
+  /* Deriva lentíssima (28s) na diagonal: dá a sensação de instrumento ligado sem
+     que o olho persiga o movimento. Em `translate3d` para ficar na GPU — animar
+     `background-position` repinta a camada inteira a cada quadro. */
+  animation:hud-deriva 28s linear infinite}
+@keyframes hud-deriva{from{transform:translate3d(0,0,0)}to{transform:translate3d(46px,46px,0)}}
+
+/* Linha de varredura: um traço fino que atravessa a tela de cima a baixo. É o
+   elemento que diz "isto está vivo e medindo". Lenta (7s) e quase transparente:
+   varredura rápida ou opaca vira distração num formulário. */
+.lg::after{
+  content:'';position:absolute;left:0;right:0;height:1px;pointer-events:none;
+  /* ★ A luz vive nas PONTAS e desaparece no meio. Medido em screenshot: com o traço
+     contínuo, a varredura cortava o cartão ao passar por ele e disputava atenção com
+     o formulário — parecia artefato, não instrumento. Assim ela atravessa o fundo e
+     "passa por trás" do cartão, que é a leitura correta: o cartão está na frente. */
+  background:linear-gradient(90deg,transparent,rgba(74,222,128,.42) 14%,
+    transparent 38%,transparent 62%,rgba(74,222,128,.42) 86%,transparent);
+  box-shadow:0 0 12px 1px rgba(74,222,128,.16);
+  animation:hud-varre 7s linear infinite}
+@keyframes hud-varre{
+  0%  {top:-2%;opacity:0}
+  8%  {opacity:.9}
+  92% {opacity:.9}
+  100%{top:102%;opacity:0}}
+
 .lg-c{width:100%;max-width:352px;background:var(--ink-2);border:1px solid var(--line);
-  padding:38px 34px 30px;text-align:center;
+  padding:34px 32px 26px;text-align:center;position:relative;
   /* Entrada suave: a tela é o primeiro contato com o produto. */
   animation:lg-in .3s var(--ease) both}
 @keyframes lg-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+/* ── Cantos de visor ──────────────────────────────────────────────────────
+   Quatro cantos em L, como mira de instrumento. Feitos com um único elemento e
+   `border` parcial + `background` em conic-gradient seria frágil; dois
+   pseudo-elementos do wrapper interno dão os quatro cantos com geometria exata.
+   São a assinatura visual mais econômica do HUD: 8 linhas de CSS, nenhum asset. */
+/* ★ `inset:0` e os cantos em `-1px`, NÃO `inset:-1px` com cantos em `-1px`. Medido
+   em screenshot: os dois -1px somavam e os cantos saíam 2px fora da borda de 1px
+   do cartão, formando um DEGRAU visível em vez de mira — o traço do canto corria
+   por fora e paralelo à borda, o que lê como erro de render. Aqui o L do canto
+   cobre exatamente a borda do cartão. */
+.lg-mira,.lg-mira2{position:absolute;inset:0;pointer-events:none}
+.lg-mira::before,.lg-mira::after,
+.lg-mira2::before,.lg-mira2::after{
+  content:'';position:absolute;width:16px;height:16px;
+  border:1px solid var(--sig);opacity:.6}
+/* Canto superior esquerdo + inferior direito */
+.lg-mira::before{top:-1px;left:-1px;border-right:0;border-bottom:0}
+.lg-mira::after{bottom:-1px;right:-1px;border-left:0;border-top:0}
+/* Os outros dois cantos vêm de um segundo elemento (um pseudo não dá quatro). */
+.lg-mira2::before{top:-1px;right:-1px;border-left:0;border-bottom:0}
+.lg-mira2::after{bottom:-1px;left:-1px;border-right:0;border-top:0}
+
+/* ── Telemetria do rodapé ─────────────────────────────────────────────────
+   Só dado PÚBLICO (o que /health devolve sem chave). Alinhado em grade de duas
+   colunas com `tabular-nums`, para os valores não dançarem quando mudarem. */
+.lg-tel{margin-top:20px;padding-top:14px;border-top:1px solid var(--line-2);
+  display:grid;grid-template-columns:auto auto;gap:5px 14px;justify-content:center;
+  font-family:var(--mono);font-size:9.5px;letter-spacing:.05em;
+  font-variant-numeric:tabular-nums}
+.lg-tel dt{color:var(--t4);text-transform:uppercase}
+.lg-tel dd{color:var(--t3);margin:0;text-align:left}
+/* O ponto de status pisca junto com o valor "ok" — é o sinal de vida do sistema
+   em si, não do formulário. */
+.lg-tel .st-on{display:inline-block;width:5px;height:5px;border-radius:50%;
+  background:var(--sig);margin-right:5px;vertical-align:middle;
+  animation:hud-bat 2s var(--ease) infinite}
+@keyframes hud-bat{0%,100%{opacity:1}50%{opacity:.35}}
+
+@media (prefers-reduced-motion:reduce){
+  .lg::before,.lg::after,.lg-tel .st-on{animation:none}
+  /* A varredura precisa SAIR de vista, não congelar no meio da tela. */
+  .lg::after{display:none}
+}
 .mk-lg{color:var(--sig);display:block;margin:0 auto 18px}
 /* ★ NAO redimensionar por CSS: o SVG e desenhado numa grade 1:1 com o tamanho do
    atributo (viewBox 48 a 48px). Qualquer escala fracionaria joga as coordenadas
@@ -557,7 +650,7 @@ a{color:inherit;text-decoration:none}
   /* O raio do foco cresce com --gi: perto do campo o vazamento é largo e
      forte, longe fica um ponto discreto. */
   background:radial-gradient(
-    calc(110px + 170px * var(--gi,.3)) circle at var(--mx,50%) var(--my,0%),
+    calc(110px + 170px * var(--gi,.3)) circle at var(--mx,50%) var(--my,50%),
     #b9ffd4 0%,
     var(--sig) calc(8% + 14% * var(--gi,.3)),
     var(--sig-dim) 46%,transparent 76%);
@@ -575,7 +668,7 @@ a{color:inherit;text-decoration:none}
      isto que separa "algo escapando" de "borda pintada". */
   inset:-40px;border-radius:30px;
   background:radial-gradient(
-    calc(150px + 210px * var(--gi,.3)) circle at var(--mx,50%) var(--my,0%),
+    calc(150px + 210px * var(--gi,.3)) circle at var(--mx,50%) var(--my,50%),
     var(--sig) 0%,var(--sig) 18%,var(--sig-dim) 44%,transparent 74%);
   /* O blur faz a luz ter volume em vez de forma. Custa GPU, então fica só nesta
      camada (a moldura precisa de borda nítida) e é promovida com will-change
@@ -606,27 +699,62 @@ a{color:inherit;text-decoration:none}
    SALTAR quando o /health responde depois do primeiro render. */
 .lg-v{font-size:9.5px;color:var(--t3);font-family:var(--mono);letter-spacing:.06em;
   margin-top:10px;min-height:12px;opacity:.85}
-/* Régua fina separando a marca do formulário — aqui ela separa DUAS coisas. */
-.lg-c hr{border:0;border-top:1px solid var(--line-2);margin:26px 0 24px}
+/* Régua tracejada em vez de sólida: no vocabulário de terminal, separador é
+   caractere repetido. Mantém a função de dividir marca e formulário. */
+.lg-c hr{border:0;border-top:1px dashed var(--line);opacity:.65;margin:22px 0 20px}
 /* Formulário alinhado à esquerda dentro do cartão centrado: rótulo e campo
    pedem leitura em linha, não centralização. */
 .lg-c .fd{text-align:left;margin-bottom:0}
-.lg-c .fd input{text-align:center;letter-spacing:.14em;font-family:var(--mono);
-  padding:11px 12px}
-.lg-c .fd-e{text-align:center;margin-top:10px}
-.lg-b{display:flex;margin-top:18px}
-.lg-b button{flex:1;font-size:11px;color:var(--ink);background:var(--sig);
-  border:1px solid var(--sig);padding:11px 16px;letter-spacing:.14em;
-  text-transform:uppercase;cursor:pointer;font-family:inherit;font-weight:600;
-  transition:opacity .15s,transform .1s}
-.lg-b button:hover{opacity:.9}
+/* Rótulo com marcador `▸`, como prompt de comando. O caractere vem do CSS e não
+   do markup: é decoração, e leitor de tela não deve anunciar "triângulo". */
+.lg-c .fd label{font-family:var(--mono);letter-spacing:.1em}
+.lg-c .fd label::before{content:'▸ ';color:var(--sig);opacity:.8}
+/* ── O campo como linha de terminal ───────────────────────────────────────
+   Só a borda de baixo, monoespaçado, alinhado à esquerda: a caixa completa lê
+   como formulário web; a linha lê como entrada de console. O `caret-color`
+   verde é o detalhe que fecha a leitura — o cursor piscando É o elemento
+   futurista mais barato que existe, porque o navegador o anima de graça. */
+.lg-c .fd input{
+  text-align:left;letter-spacing:.22em;font-family:var(--mono);font-size:13px;
+  padding:10px 2px;background:transparent;border:0;
+  border-bottom:1px solid var(--line);border-radius:0;
+  caret-color:var(--sig);
+  transition:border-color .2s var(--ease),box-shadow .2s var(--ease)}
+.lg-c .fd input:focus{
+  border-bottom-color:var(--sig);outline:0;
+  /* Brilho SÓ para baixo (0 1px 0 + spread negativo no segundo), para a luz sair
+     da linha e não emoldurar o campo — emoldurar recriaria a caixa. */
+  box-shadow:0 1px 0 0 var(--sig),0 6px 16px -6px rgba(74,222,128,.55)}
+.lg-c .fd-e{text-align:left;margin-top:10px;font-family:var(--mono)}
+.lg-b{display:flex;margin-top:20px}
+/* ── Botão: contorno, não bloco preenchido ────────────────────────────────
+   O botão sólido verde era a maior área de cor da tela e brigava com o glow.
+   Em contorno, ele participa do HUD; o preenchimento aparece no hover, então o
+   estado ativo continua inequívoco. */
+.lg-b button{flex:1;font-size:11px;color:var(--sig);background:transparent;
+  border:1px solid var(--sig);padding:12px 16px;letter-spacing:.2em;
+  text-transform:uppercase;cursor:pointer;font-family:var(--mono);font-weight:600;
+  position:relative;overflow:hidden;
+  transition:color .18s var(--ease),background .18s var(--ease),
+    box-shadow .18s var(--ease),transform .1s}
+.lg-b button:hover:not(:disabled){
+  color:var(--ink);background:var(--sig);
+  box-shadow:0 0 22px -4px rgba(74,222,128,.7)}
 .lg-b button:active{transform:translateY(1px)}
 .lg-b button:disabled{opacity:.6;cursor:progress}
-/* O .spn padrão usa --sig na borda — invisível sobre o botão, que é --sig. Aqui
-   inverte para o tom do fundo escuro do texto. */
-.lg-b .spn{border-color:rgba(0,0,0,.25);border-top-color:var(--ink);vertical-align:middle}
+/* Colchetes de terminal em volta do texto do botão. `::before/::after` e não
+   markup: são decoração e mudariam o texto que o leitor de tela anuncia. */
+.lg-b button::before{content:'[ ';opacity:.6}
+.lg-b button::after{content:' ]';opacity:.6}
+/* Quando está carregando o conteúdo é um spinner — colchetes em volta de um
+   spinner leem como erro de render. */
+.lg-b button:disabled::before,.lg-b button:disabled::after{content:''}
+/* O .spn padrão usa --sig na borda; no botão de contorno o fundo é escuro, então
+   o verde funciona — só o tom do topo precisa contrastar. */
+.lg-b .spn{border-color:rgba(74,222,128,.25);border-top-color:var(--sig);
+  vertical-align:middle}
 /* Rodapé do cartão: diz o que é este serviço, para quem caiu aqui sem contexto. */
-.lg-f{font-size:9.5px;color:var(--t3);letter-spacing:.05em;margin-top:22px;line-height:1.6}
+.lg-f{font-size:9.5px;color:var(--t3);letter-spacing:.05em;margin-top:18px;line-height:1.6}
 /* No cabeçalho a marca vira pilha de duas linhas: nome + versão. */
 .tb-idt{display:flex;flex-direction:column;line-height:1.05}
 .tb-v{font-size:8.5px;color:var(--t4);font-family:var(--mono);letter-spacing:.08em;
@@ -663,7 +791,12 @@ let bkp=null
 let bkpOff=sessionStorage.getItem('elo-bkp-off')==='1'
 // Versão do gateway. Vem do /health — endpoint PÚBLICO, então pode ser lida
 // antes do login (aparece já na tela da chave).
-const VER={v:null,c:null}
+// ★ Guarda também `engine` e `status`, que o /health já devolvia e o painel
+// descartava. São o que a telemetria da tela de entrada exibe — e é dado PÚBLICO
+// por definição (a rota dispensa chave). Nada de sessão ou canal entra aqui: a
+// tela de login é pública, e contagem de canais antes da autenticação seria
+// vazamento de informação de operação.
+const VER={v:null,c:null,engine:null,status:null}
 function verLabel(){
   // Commit só entra quando existe (build local não passa COMMIT_SHA).
   return VER.c?`v${VER.v} · ${VER.c}`:`v${VER.v}`
@@ -674,11 +807,29 @@ async function loadVersion(){
     if(!r.ok)return
     const h=await r.json()
     VER.v=h.version||null; VER.c=h.commit||null
+    VER.engine=h.engine||null; VER.status=h.status||null
     // Pinta onde já estiver renderizado (a tela pode ter carregado antes).
     for(const id of ['lgv','tbv']){
       const el=$(id); if(el&&VER.v)el.textContent=verLabel()
     }
+    pintarTelemetria()
   }catch{/* versão é informativa; falhar aqui não pode travar o painel */}
+}
+
+/**
+ * Preenche a telemetria da tela de entrada, se ela estiver na tela.
+ *
+ * Separado de loadVersion porque a ordem das duas não é garantida: o /health pode
+ * responder antes de a tela existir (e aí não há onde pintar) ou depois (e aí a
+ * tela nasceu com os campos vazios). Chamado nas duas pontas.
+ */
+function pintarTelemetria(){
+  const eng=$('telE'), sta=$('telS')
+  if(eng&&VER.engine)eng.textContent=VER.engine.toLowerCase()
+  if(sta&&VER.status){
+    // O ponto é decoração de estado; o texto é o que o leitor de tela anuncia.
+    sta.innerHTML=`<span class="st-on" aria-hidden="true"></span>${esc(VER.status)}`
+  }
 }
 let q='', filt=null, sort={c:'name',d:1}, evFilt=new Set()
 let loading=false, timer=null, ctl=null, live=false, lastSeq=0
@@ -806,8 +957,17 @@ function login(err){
        placeholder="••••••••••••" spellcheck="false" autocapitalize="off">
      <div class="fd-e" id="lge">${err?esc(err):''}</div>
    </div>
-   <div class="lg-b"><button id="g">entrar</button></div>
+   <div class="lg-b"><button id="g">autenticar</button></div>
    <div class="lg-f">acesso ao painel de operação das sessões</div>
+   <!-- Telemetria: só dado público (/health dispensa chave). Como <dl> porque é
+        literalmente uma lista de termo/valor — leitor de tela lê o par junto. -->
+   <dl class="lg-tel">
+     <dt>engine</dt><dd id="telE">${VER.engine?esc(VER.engine.toLowerCase()):'—'}</dd>
+     <dt>gateway</dt><dd id="telS">${VER.status?`<span class="st-on" aria-hidden="true"></span>${esc(VER.status)}`:'—'}</dd>
+   </dl>
+   <!-- Cantos de visor. Dois elementos porque um pseudo-par não dá quatro cantos. -->
+   <span class="lg-mira" aria-hidden="true"></span>
+   <span class="lg-mira2" aria-hidden="true"></span>
   </div></div></div>`
 
   const inp=$('k'), btn=$('g'), erro=$('lge')
@@ -842,6 +1002,10 @@ function login(err){
   inp.oninput=()=>{if(erro.textContent)erro.textContent=''}
   inp.focus()
   ligarGlow()
+  // O /health pode ter respondido ANTES desta tela existir (ex.: após logout, em
+  // que o painel já rodava): sem isto a telemetria ficaria em "—" com o dado já
+  // em memória. O template acima cobre o caso oposto.
+  pintarTelemetria()
 }
 
 /**

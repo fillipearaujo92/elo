@@ -273,7 +273,10 @@ describe('painel: glow do quadro seguindo o mouse', () => {
     // Sem default, o contorno so acenderia apos o primeiro movimento do mouse — quem
     // abre a tela e nao mexe o mouse veria um cartao morto.
     // As DUAS camadas precisam do default (uma sem ele nasceria no canto 0,0).
-    const usos = [...css.matchAll(/at var\(--mx,\s*50%\)\s+var\(--my,\s*0%\)/g)];
+    // O default é 50%/50% (centro). Era 50%/0% (topo) e, com o fundo do HUD, isso
+    // aparecia como uma MANCHA forte acima do cartão antes de o mouse mover —
+    // visível só em screenshot. Centrado, o repouso lê como quadro levemente aceso.
+    const usos = [...css.matchAll(/at var\(--mx,\s*50%\)\s+var\(--my,\s*50%\)/g)];
     assert.equal(usos.length, 2, 'as duas camadas de luz precisam do default de --mx/--my');
     // ★ `--gi` tambem precisa de fallback em TODO uso: dentro de um calc(), um var()
     // sem valor invalida a declaracao inteira em silencio — e a camada desaparece sem
