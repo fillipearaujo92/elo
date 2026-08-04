@@ -1,6 +1,6 @@
 {
   "name": "elo-gateway",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "private": true,
   "description": "ELO — gateway WhatsApp self-hosted. Instale no seu servidor e integre no seu sistema de atendimento.",
   "type": "module",

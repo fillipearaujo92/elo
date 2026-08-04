@@ -69,7 +69,11 @@ describe('painel: variaveis CSS', () => {
 
 describe('painel: pulso da marca', () => {
   it('as duas marcas tem os elos identificados', () => {
-    const svgs = html.match(/<svg class="mk(-lg)?"[\s\S]*?<\/svg>/g) ?? [];
+    // ★ Aceita classes ADICIONAIS no mesmo atributo (`class="mk-lg mk-entra"`). O
+    // regex antigo exigia o atributo exato e passou a nao casar quando a marca do
+    // login ganhou a classe da animacao de entrada — o teste falhava dizendo
+    // "cabecalho + tela de entrada", como se um SVG tivesse desaparecido.
+    const svgs = html.match(/<svg class="mk(-lg)?[^"]*"[\s\S]*?<\/svg>/g) ?? [];
     assert.equal(svgs.length, 2, 'cabecalho + tela de entrada');
     for (const s of svgs) {
       assert.ok(s.includes('class="e1"'), 'elo 1 sem classe — o CSS nao casa');
@@ -175,5 +179,155 @@ describe('painel: o elo 2 sinaliza o estado dos canais', () => {
     // Cor sozinha exclui quem não a distingue; os contadores nomeiam o estado.
     assert.ok(js.includes("sg('SCAN_QR_CODE','aguardando qr'"));
     assert.ok(js.includes("sg('FAILED','com falha'"));
+  });
+});
+
+// ── Entrada da marca e glow do quadro (tela de login) ──────────────────────
+//
+// Estes testes travam o que foi VERIFICADO no Chrome real (headless, sob o CSP de
+// producao) em 04/08: 4 animacoes rodando, `cx` interpolando de 10,19px a 14,75px, e
+// `--mx/--my` mudando de -29,83%/19,76% para 89,49%/89,16% conforme o mouse.
+//
+// O que estes testes cobrem e o que os pre-requisitos disso continuem no arquivo —
+// eles NAO substituem a medicao no navegador (nenhum teste de string executa CSS).
+// Duas armadilhas desta tela ja custaram caro: o `--ease` que faltava (3 animacoes
+// mortas em silencio) e o CSP do helmet matando os 37 onclick (painel 200 com botoes
+// mortos). String test nao pega nenhuma das duas.
+
+describe('painel: entrada da marca no login', () => {
+  it('a marca do LOGIN tem a classe da entrada; a do cabecalho NAO', () => {
+    // O cabecalho nao deve reanimar a cada render da lista de sessoes — seria um
+    // piscar constante no canto da tela.
+    const login = html.match(/<svg class="mk-lg[^"]*"/)?.[0] ?? '';
+    assert.match(login, /mk-entra/, 'a marca do login precisa da classe de entrada');
+    const cab = html.match(/<svg class="mk"[^>]*>/)?.[0] ?? '';
+    assert.ok(!cab.includes('mk-entra'), 'a marca do cabecalho NAO deve reanimar');
+  });
+
+  it('★ a entrada anima `cx` (geometria), NUNCA transform', () => {
+    // O serrilhado documentado neste arquivo volta se alguem trocar cx por
+    // transform: escalar joga cx/r/stroke em subpixel e a logo serrilha quadro a
+    // quadro. Animar o atributo redesenha o circulo em coordenada nova, sem raster.
+    const ks = css.match(/@keyframes mk-entra-\d\{[^}]*\}[^}]*\}/g) ?? [];
+    assert.equal(ks.length, 2, 'faltam os keyframes da entrada');
+    for (const k of ks) {
+      assert.match(k, /cx:/, 'a entrada tem de animar cx');
+      assert.ok(!/transform/.test(k), 'transform serrilha a marca — ver comentario acima');
+    }
+  });
+
+  it('os dois elos ENTRAM de lados opostos (o handshake da marca)', () => {
+    // e1 vem da esquerda (cx menor que o final 15), e2 da direita (maior que 29).
+    const e1 = css.match(/@keyframes mk-entra-1\{from\{cx:(\d+)\}to\{cx:(\d+)\}\}/);
+    const e2 = css.match(/@keyframes mk-entra-2\{from\{cx:(\d+)\}to\{cx:(\d+)\}\}/);
+    assert.ok(e1 && e2, 'keyframes da entrada com forma inesperada');
+    assert.ok(Number(e1![1]) < Number(e1![2]), 'o elo 1 deve entrar pela esquerda');
+    assert.ok(Number(e2![1]) > Number(e2![2]), 'o elo 2 deve entrar pela direita');
+  });
+
+  it('a entrada nao engole o pulso de repouso (as duas convivem)', () => {
+    // Medido no Chrome: 4 animacoes ativas (2 de entrada + 2 de pulso). Se alguem
+    // substituir em vez de somar, a marca entra e fica parada — perde o sinal de vida.
+    assert.match(css, /\.mk-entra \.e1\{animation:mk-entra-1[^}]*mk-pulso /,
+      'o elo 1 precisa manter o pulso apos a entrada');
+    assert.match(css, /\.mk-entra \.e2\{animation:mk-entra-2[^}]*mk-pulso-2 /,
+      'o elo 2 precisa manter o pulso apos a entrada');
+  });
+
+  it('★ prefers-reduced-motion desliga a entrada', () => {
+    // Verificado no Chrome com a media emulada: `getAnimations()` devolveu [].
+    const bloco = css.match(/@media \(prefers-reduced-motion:reduce\)\{[^}]*\.mk-entra[^}]*\}/);
+    assert.ok(bloco, 'falta a guarda de movimento reduzido para a entrada');
+    assert.match(bloco![0], /animation:none/);
+  });
+});
+
+describe('painel: glow do quadro seguindo o mouse', () => {
+  it('o glow pinta a BORDA, nao o cartao inteiro (mascara recorta o miolo)', () => {
+    // Sem a mascara, o gradiente acende o fundo do cartao e lava o texto — o efeito
+    // pedido e contorno. `padding` + mask-composite:exclude e o que deixa so a moldura.
+    // ★ Comentarios FORA antes de casar. A regra do glow tem um comentario que cita
+    // `mask-composite:exclude` para explicar a ordem dos prefixos — e uma mutacao que
+    // apagou a DECLARACAO passou verde, porque o regex casou com o texto do comentario.
+    // Verificar declaracao lendo comentario e o mesmo que nao verificar.
+    const cssLimpo = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    const regra = cssLimpo.match(/\.lg-c::before\{[\s\S]*?pointer-events:none\}/)?.[0] ?? '';
+    assert.ok(regra, 'regra do glow nao encontrada');
+    assert.match(regra, /padding:1px/, 'sem padding nao ha moldura');
+    // ★ O padrao SEM prefixo tem de existir por si. Uma mutacao que apagou
+    // `mask-composite:exclude` deixando so o `-webkit-mask-composite:xor` passou por um
+    // regex que casava os dois — e sem a versao padrao o Chrome atual nao recorta o
+    // miolo, ou seja, o gradiente acende o cartao inteiro e lava o texto.
+    assert.match(regra, /(?<!-webkit-)mask-composite:\s*exclude/,
+      'falta mask-composite:exclude SEM prefixo — sem ele o miolo nao e recortado');
+    assert.match(regra, /-webkit-mask-composite:\s*xor/, 'Safari precisa do prefixo');
+  });
+
+  it('a posicao vem de --mx/--my com default (a tela abre viva)', () => {
+    // Sem default, o contorno so acenderia apos o primeiro movimento do mouse — quem
+    // abre a tela e nao mexe o mouse veria um cartao morto.
+    assert.match(css, /at var\(--mx,\s*50%\)\s+var\(--my,\s*0%\)/,
+      'o gradiente precisa de default para --mx/--my');
+  });
+
+  it('★ a transicao e na OPACIDADE, nao na posicao', () => {
+    // Interpolar --mx faria o halo arrastar atras do cursor com atraso — le como
+    // travado. So o acender/apagar e suave.
+    const regra = css.match(/\.lg-c::before\{[\s\S]*?\}/)?.[0] ?? '';
+    assert.match(regra, /transition:opacity/, 'a transicao deve ser de opacidade');
+    assert.ok(!/transition:[^;]*--m/.test(regra), 'nao interpolar a posicao');
+  });
+
+  it('o listener e no DOCUMENTO (a borda acende na aproximacao)', () => {
+    // Preso ao cartao, o halo so reagiria com o mouse JA sobre ele — e a borda mais
+    // proxima do cursor, que e o ponto do efeito, nunca acenderia.
+    assert.match(html, /document\.addEventListener\('mousemove'/,
+      'o mousemove precisa ser no documento');
+  });
+
+  it('★ escreve no maximo uma vez por quadro (requestAnimationFrame)', () => {
+    // mousemove dispara muito mais que 60x/s e cada escrita em custom property usada
+    // por gradiente forca repaint. Sem coalescing o efeito custa mais que a tela toda.
+    assert.match(html, /requestAnimationFrame\(pintar\)/, 'falta o coalescing por quadro');
+  });
+
+  it('★ remove o listener quando o cartao sai do DOM', () => {
+    // Cada logout() re-renderiza o login. Sem remover, o listener anterior segue vivo
+    // mexendo num no orfao — vazamento que so aparece depois de varios login/logout.
+    assert.match(html, /removeEventListener\('mousemove',\s*mover\)/,
+      'o listener tem de ser removido — senao vaza a cada logout');
+  });
+
+  it('prefers-reduced-motion nao recebe brilho perseguindo o cursor', () => {
+    // Verificado no Chrome com a media emulada: --mx/--my nunca foram escritos.
+    // O guard tem de estar DENTRO de ligarGlow e antes de registrar o listener —
+    // checar so a presenca da string casaria com o @media do CSS, que e outra coisa.
+    const fn = html.match(/function ligarGlow\(\)\{[\s\S]*?\n\}/)?.[0] ?? '';
+    assert.ok(fn, 'ligarGlow nao encontrada');
+    const iGuard = fn.indexOf('prefers-reduced-motion');
+    const iListener = fn.indexOf("addEventListener('mousemove'");
+    assert.ok(iGuard > -1, 'ligarGlow precisa checar prefers-reduced-motion');
+    assert.ok(iGuard < iListener, 'o guard tem de vir ANTES de registrar o mousemove');
+  });
+});
+
+describe('painel: o subtitulo do login foi removido', () => {
+  it('nao ha "gateway whatsapp" na tela de entrada', () => {
+    // Verifica o que RENDERIZA, com os comentarios fora: o termo segue legitimo em
+    // comentario (o cabecalho do arquivo descreve o que o painel e) e censurar isso
+    // proibiria documentar o proprio produto. O que nao pode e voltar como TEXTO.
+    const semComentarios = html
+      .replace(/<!--[\s\S]*?-->/g, '')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^\s*\/\/.*$/gm, '');
+    assert.ok(!/>\s*gateway whatsapp\s*</i.test(semComentarios),
+      'o subtitulo voltou ao markup — repetia o que a marca e o nome ja dizem');
+    assert.ok(!/class="lg-s"/.test(semComentarios), 'o elemento do subtitulo voltou');
+  });
+
+  it('a regra .lg-s nao ficou orfa no CSS', () => {
+    // Regra orfa sobrevive por anos e faz a proxima pessoa procurar um elemento que
+    // nao existe. (O teste de keyframes orfaos acima existe pelo mesmo motivo.)
+    assert.ok(!/^\.lg-s\{/m.test(css), 'a regra do subtitulo removido continua no CSS');
   });
 });
