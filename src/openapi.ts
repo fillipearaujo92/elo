@@ -151,6 +151,13 @@ export function buildOpenApi(version: string): Record<string, unknown> {
       { name: 'Messages', description: 'Act on a message already sent.' },
       { name: 'Presence', description: 'Typing indicator, online state, mark as read.' },
       { name: 'Contacts', description: 'Check a number, resolve hidden ids.' },
+      {
+        name: 'Groups',
+        description:
+          'Create groups, manage participants, subject, description, settings and invites. ' +
+          'Most write operations require the connected number to be a group ADMIN — WhatsApp ' +
+          'rejects them otherwise, and the gateway returns 403 with `code: group_not_admin`.',
+      },
       { name: 'Operations', description: 'Health, metrics, backup, live diagnostics.' },
     ],
     components: {
@@ -158,6 +165,36 @@ export function buildOpenApi(version: string): Record<string, unknown> {
         ApiKey: { type: 'apiKey', in: 'header', name: 'X-Api-Key' },
       },
       schemas: {
+        // Shape estavel de grupo. Deliberadamente NAO espelha o objeto do Baileys:
+        // `announce`/`restrict` e `admin: 'admin'|'superadmin'|null` obrigariam quem
+        // consome a conhecer o vocabulario interno da biblioteca.
+        Group: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', description: 'Bare group id — send this back in calls.' },
+            jid: { type: 'string', description: 'Full JID, for consumers that prefer it.' },
+            subject: { type: 'string', nullable: true },
+            description: { type: 'string', nullable: true },
+            owner: { type: 'string', nullable: true },
+            createdAt: { type: 'string', format: 'date-time', nullable: true },
+            size: { type: 'integer', description: 'Taken from the participant list.' },
+            onlyAdminsCanPost: { type: 'boolean' },
+            onlyAdminsCanEdit: { type: 'boolean' },
+            isCommunity: { type: 'boolean' },
+            participants: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string' },
+                  jid: { type: 'string' },
+                  isAdmin: { type: 'boolean' },
+                  isSuperAdmin: { type: 'boolean' },
+                },
+              },
+            },
+          },
+        },
         Session: {
           type: 'object',
           properties: {
@@ -957,6 +994,439 @@ export function buildOpenApi(version: string): Record<string, unknown> {
             'conversation. Resolve it here.',
           operationId: 'resolveLid',
           responses: { 200: { description: 'Phone number.' }, 404: erro('Unknown LID.') },
+        },
+      },
+
+      // ── Grupos ───────────────────────────────────────────────────────────
+      //
+      // `groupId` accepts both the bare id ("120363...") and the full JID
+      // ("120363...@g.us"): consumers store one or the other depending on the provider
+      // they came from, and demanding a single form is friction with no upside.
+      '/api/groups': {
+        get: {
+          tags: ['Groups'],
+          summary: 'List the groups this number belongs to',
+          description:
+            'One call to WhatsApp returns every group with its metadata. There is no ' +
+            'pagination — the protocol delivers the whole set at once. Sorted by subject so ' +
+            'the list is stable between calls (WhatsApp does not guarantee order).',
+          operationId: 'listGroups',
+          parameters: [{ name: 'session', in: 'query', required: true, schema: { type: 'string' } }],
+          responses: {
+            200: {
+              description: 'Groups.',
+              content: {
+                'application/json': {
+                  schema: { type: 'array', items: { $ref: '#/components/schemas/Group' } },
+                },
+              },
+            },
+            422: naoConectada,
+          },
+        },
+        post: {
+          tags: ['Groups'],
+          summary: 'Create a group',
+          description:
+            'WhatsApp requires at least one participant besides the connected number — ' +
+            'there is no such thing as an empty group in the protocol.',
+          operationId: 'createGroup',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['session', 'subject', 'participants'],
+                  properties: {
+                    session: sessionName,
+                    subject: { type: 'string', maxLength: 100 },
+                    participants: {
+                      type: 'array',
+                      minItems: 1,
+                      maxItems: 100,
+                      items: { type: 'string' },
+                      description: 'Phone numbers or JIDs.',
+                    },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            201: {
+              description: 'Created.',
+              content: {
+                'application/json': { schema: { $ref: '#/components/schemas/Group' } },
+              },
+            },
+            400: erro('Missing subject, or an empty participant list.'),
+            422: naoConectada,
+          },
+        },
+      },
+
+      '/api/groups/{groupId}': {
+        parameters: [{ name: 'groupId', in: 'path', required: true, schema: { type: 'string' } }],
+        get: {
+          tags: ['Groups'],
+          summary: 'Group metadata and participants',
+          operationId: 'getGroup',
+          parameters: [{ name: 'session', in: 'query', required: true, schema: { type: 'string' } }],
+          responses: {
+            200: {
+              description: 'Group.',
+              content: {
+                'application/json': { schema: { $ref: '#/components/schemas/Group' } },
+              },
+            },
+            400: erro('groupId points at a contact (@c.us/@lid), or is not a group id.'),
+            404: erro('Group not found, or this number is not a member.'),
+            422: naoConectada,
+          },
+        },
+      },
+
+      '/api/groups/{groupId}/participants': {
+        parameters: [{ name: 'groupId', in: 'path', required: true, schema: { type: 'string' } }],
+        post: {
+          tags: ['Groups'],
+          summary: 'Add, remove, promote or demote participants',
+          description:
+            'One route for the four actions because in the protocol it is the SAME ' +
+            'operation with a different field.\n\n' +
+            '**The response is per participant.** WhatsApp accepts partially — 3 of 5 in the ' +
+            'same call — so an aggregate "ok" would hide the failures, and the operator would ' +
+            'see a group missing people with no explanation.',
+          operationId: 'updateGroupParticipants',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['session', 'action', 'participants'],
+                  properties: {
+                    session: sessionName,
+                    action: { type: 'string', enum: ['add', 'remove', 'promote', 'demote'] },
+                    participants: {
+                      type: 'array', minItems: 1, maxItems: 100, items: { type: 'string' },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: {
+              description: 'Result per participant.',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      action: { type: 'string' },
+                      requested: { type: 'integer' },
+                      succeeded: { type: 'integer' },
+                      failed: { type: 'integer' },
+                      results: {
+                        type: 'array',
+                        items: {
+                          type: 'object',
+                          properties: {
+                            id: { type: 'string' },
+                            jid: { type: 'string' },
+                            status: { type: 'string', description: 'Raw WhatsApp status.' },
+                            ok: { type: 'boolean' },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            400: erro('Invalid action, or more than 100 participants.'),
+            403: erro('The connected number must be a group ADMIN (`code: group_not_admin`).'),
+            422: naoConectada,
+          },
+        },
+      },
+
+      '/api/groups/{groupId}/subject': {
+        parameters: [{ name: 'groupId', in: 'path', required: true, schema: { type: 'string' } }],
+        put: {
+          tags: ['Groups'],
+          summary: 'Rename the group',
+          operationId: 'setGroupSubject',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['session', 'subject'],
+                  properties: { session: sessionName, subject: { type: 'string', maxLength: 100 } },
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: 'Renamed.' },
+            400: erro('Missing subject, or longer than 100 characters.'),
+            403: erro('Admin required (`code: group_not_admin`).'),
+            422: naoConectada,
+          },
+        },
+      },
+
+      '/api/groups/{groupId}/description': {
+        parameters: [{ name: 'groupId', in: 'path', required: true, schema: { type: 'string' } }],
+        put: {
+          tags: ['Groups'],
+          summary: 'Set or clear the group description',
+          description:
+            'An empty or absent `description` CLEARS it. Documented because it is not ' +
+            'obvious — the intuitive behaviour would be a 400.',
+          operationId: 'setGroupDescription',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['session'],
+                  properties: {
+                    session: sessionName,
+                    description: { type: 'string', maxLength: 2048, nullable: true },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: 'Applied.' },
+            403: erro('Admin required (`code: group_not_admin`).'),
+            422: naoConectada,
+          },
+        },
+      },
+
+      '/api/groups/{groupId}/settings': {
+        parameters: [{ name: 'groupId', in: 'path', required: true, schema: { type: 'string' } }],
+        put: {
+          tags: ['Groups'],
+          summary: 'Who can post, edit, add members; join approval',
+          description:
+            'Fields are named by intent instead of WhatsApp\'s internal vocabulary ' +
+            '(`announcement`/`locked`), which tells a first-time reader nothing. Send only ' +
+            'the switches you want to change.',
+          operationId: 'setGroupSettings',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['session'],
+                  properties: {
+                    session: sessionName,
+                    onlyAdminsCanPost: { type: 'boolean' },
+                    onlyAdminsCanEdit: { type: 'boolean' },
+                    whoCanAddMembers: { type: 'string', enum: ['admins', 'all'] },
+                    joinApproval: { type: 'boolean' },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: 'Applied settings are echoed back.' },
+            400: erro('No setting provided.'),
+            403: erro('Admin required (`code: group_not_admin`).'),
+            422: naoConectada,
+          },
+        },
+      },
+
+      '/api/groups/{groupId}/invite': {
+        parameters: [{ name: 'groupId', in: 'path', required: true, schema: { type: 'string' } }],
+        get: {
+          tags: ['Groups'],
+          summary: 'Invite code and link',
+          operationId: 'getGroupInvite',
+          parameters: [{ name: 'session', in: 'query', required: true, schema: { type: 'string' } }],
+          responses: {
+            200: {
+              description: 'Code and ready-to-share URL.',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      groupId: { type: 'string' },
+                      code: { type: 'string' },
+                      url: { type: 'string' },
+                    },
+                  },
+                },
+              },
+            },
+            403: erro('Admin required (`code: group_not_admin`).'),
+            422: naoConectada,
+          },
+        },
+      },
+
+      '/api/groups/{groupId}/invite/revoke': {
+        parameters: [{ name: 'groupId', in: 'path', required: true, schema: { type: 'string' } }],
+        post: {
+          tags: ['Groups'],
+          summary: 'Invalidate the current link and get the new one',
+          description:
+            'Returns the NEW code. Revoking without saying what replaced it would force a ' +
+            'second call, and in that window the consumer would display a dead link.',
+          operationId: 'revokeGroupInvite',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['session'],
+                  properties: { session: sessionName },
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: 'New code and URL.' },
+            403: erro('Admin required (`code: group_not_admin`).'),
+            422: naoConectada,
+          },
+        },
+      },
+
+      '/api/groups/join': {
+        post: {
+          tags: ['Groups'],
+          summary: 'Join a group by invite code',
+          description: 'Accepts the bare code or the full `chat.whatsapp.com` URL.',
+          operationId: 'joinGroup',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['session', 'code'],
+                  properties: { session: sessionName, code: { type: 'string' } },
+                },
+              },
+            },
+          },
+          responses: {
+            201: { description: 'Joined; returns the group id.' },
+            400: erro('Invalid invite code.'),
+            422: naoConectada,
+          },
+        },
+      },
+
+      '/api/groups/invite-info': {
+        get: {
+          tags: ['Groups'],
+          summary: 'Inspect an invite WITHOUT joining',
+          description:
+            'Lets the consumer show "you are about to join group X, with N members" before ' +
+            'confirming. Joining and then leaving would leave a trace in the group.',
+          operationId: 'getGroupInviteInfo',
+          parameters: [
+            { name: 'session', in: 'query', required: true, schema: { type: 'string' } },
+            { name: 'code', in: 'query', required: true, schema: { type: 'string' } },
+          ],
+          responses: {
+            200: {
+              description: 'Group behind the invite.',
+              content: {
+                'application/json': { schema: { $ref: '#/components/schemas/Group' } },
+              },
+            },
+            400: erro('Missing code.'),
+            422: naoConectada,
+          },
+        },
+      },
+
+      '/api/groups/{groupId}/leave': {
+        parameters: [{ name: 'groupId', in: 'path', required: true, schema: { type: 'string' } }],
+        post: {
+          tags: ['Groups'],
+          summary: 'Leave the group',
+          description:
+            'Leaving does NOT delete the group or the history on the consumer side — the ' +
+            'gateway simply stops participating.',
+          operationId: 'leaveGroup',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['session'],
+                  properties: { session: sessionName },
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: 'Left the group.' },
+            404: erro('Group not found, or already not a member.'),
+            422: naoConectada,
+          },
+        },
+      },
+
+      '/api/groups/{groupId}/join-requests': {
+        parameters: [{ name: 'groupId', in: 'path', required: true, schema: { type: 'string' } }],
+        get: {
+          tags: ['Groups'],
+          summary: 'Pending join requests (when approval is on)',
+          operationId: 'listGroupJoinRequests',
+          parameters: [{ name: 'session', in: 'query', required: true, schema: { type: 'string' } }],
+          responses: {
+            200: { description: 'Pending requests.' },
+            403: erro('Admin required (`code: group_not_admin`).'),
+            422: naoConectada,
+          },
+        },
+        post: {
+          tags: ['Groups'],
+          summary: 'Approve or reject join requests',
+          description: 'Like participants, the response is per requester.',
+          operationId: 'updateGroupJoinRequests',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['session', 'action', 'participants'],
+                  properties: {
+                    session: sessionName,
+                    action: { type: 'string', enum: ['approve', 'reject'] },
+                    participants: { type: 'array', minItems: 1, items: { type: 'string' } },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: 'Result per requester.' },
+            400: erro('Invalid action.'),
+            403: erro('Admin required (`code: group_not_admin`).'),
+            422: naoConectada,
+          },
         },
       },
 

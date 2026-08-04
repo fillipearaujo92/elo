@@ -13,6 +13,7 @@ import { SessionManager } from './core/session-manager.js';
 import { WebhookEmitter } from './core/webhook.js';
 import { migrate, pool } from './db/pool.js';
 import { registerContactRoutes } from './routes/contacts.js';
+import { registerGroupRoutes } from './routes/groups.js';
 import { registerSendRoutes } from './routes/send.js';
 import { registerPresenceRoutes } from './routes/presence.js';
 import { registerSessionRoutes } from './routes/sessions.js';
@@ -401,6 +402,7 @@ app.get<{ Querystring: { after?: string } }>('/api/events', async (req, reply) =
 registerSessionRoutes(app, { sessions });
 registerSendRoutes(app, { sessions });
 registerContactRoutes(app, { sessions });
+registerGroupRoutes(app, { sessions });
 registerPresenceRoutes(app, { sessions });
 
 // ── Documentação da API ────────────────────────────────────────────────────
