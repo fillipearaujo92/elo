@@ -30,6 +30,15 @@ export type CounterName =
   | 'inbound_undecryptable_total'
   /** Mensagens descartadas por filtro de chat (grupo, status, canal, transmissão). */
   | 'inbound_filtered_total'
+  /**
+   * ★★ Mensagem PERDIDA: nao decifrou NEM no retry. Distinto de
+   * `inbound_undecryptable_total`, que conta a PRIMEIRA falha (recuperavel).
+   *
+   * Este e o numero que responde "estou perdendo mensagem de cliente AGORA?". Medido
+   * no beta antes da correcao: 5 de 7 nao decifradas nunca chegaram ao consumidor, e o
+   * contador antigo nao permitia ver isso.
+   */
+  | 'inbound_lost_total'
   /** Mensagens enviadas com sucesso (o WhatsApp devolveu id). */
   | 'outbound_total'
   /** Envios que falharam antes de sair. */
@@ -69,6 +78,8 @@ const HELP: Record<CounterName, string> = {
   inbound_undecryptable_total:
     'Mensagens NAO decifradas (Bad MAC/sessao Signal) - valor > 0 indica perda de mensagem',
   inbound_filtered_total: 'Mensagens descartadas por filtro de tipo de chat',
+  inbound_lost_total:
+    'Mensagens PERDIDAS: nao decifraram nem no reenvio - valor > 0 e perda REAL de mensagem',
   outbound_total: 'Mensagens enviadas com sucesso',
   outbound_error_total: 'Falhas de envio antes de sair do gateway',
   ack_failed_total: 'ACK de falha (-1): mensagem saiu e nao foi entregue',

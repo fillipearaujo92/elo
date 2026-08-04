@@ -338,6 +338,16 @@ export class SessionManager {
    * Em memoria e com TETO: presenca e efemera (vale segundos) e o volume seria
    * enorme num tenant com milhares de conversas.
    */
+  /**
+   * Ids que JA falharam ao decifrar uma vez. Segunda falha do mesmo id = o retry
+   * tambem nao decifrou = mensagem PERDIDA (ver o uso em onMessageUpsert).
+   *
+   * Em memoria e com teto: e sinal operacional de curto prazo, nao dado de negocio.
+   * Reiniciar o container zera, e isso e aceitavel — a mensagem que se perdeu antes do
+   * restart nao volta de qualquer forma.
+   */
+  private readonly decryptFalhou = new Set<string>();
+
   private readonly presences = new Map<string, { state: string; lastSeen: number | null; at: number }>();
   private waVersion: [number, number, number] | undefined;
   /**
@@ -999,6 +1009,22 @@ export class SessionManager {
       // chances a um dispositivo com sessao ruim antes de desistir.
       maxMsgRetryCount: 5,
 
+      // ★ Espera antes de PEDIR o reenvio de uma mensagem que nao decifrou.
+      //
+      // O default do Baileys e 250ms (Defaults/index.js), e isso e agressivo demais:
+      // quando a sessao Signal dessincroniza, o remetente precisa RECEBER o nosso
+      // retry receipt, recriar a sessao e reenviar. Em 250ms ele mal processou o
+      // recibo — e o pedido cai no vazio.
+      //
+      // MEDIDO no beta com o default: 7 mensagens nao decifradas, e apenas 2
+      // recuperadas (5 PERDIDAS, 71%). Todas em GRUPO, onde o remetente tem de
+      // reconstruir a sender-key para cada participante — o caminho mais lento.
+      //
+      // 3s da margem real sem atrasar percepcao: a mensagem so aparece depois do
+      // reenvio de qualquer forma, e 3s e melhor que perder. O `maxMsgRetryCount: 5`
+      // acima segue valendo, entao sao ate 5 tentativas espacadas.
+      retryRequestDelayMs: 3_000,
+
       // ★ Ciclo do QR. Sem isto o Baileys usa 60s no PRIMEIRO codigo e 20s nos
       // seguintes (lib/Socket/socket.js:464,478) — dois ritmos diferentes, o que
       // dessincroniza qualquer contagem do lado do painel e faz o mesmo codigo
@@ -1402,14 +1428,48 @@ export class SessionManager {
       // Continuamos sem emitir a bolha vazia (nao ha conteudo a mostrar), mas a
       // perda deixou de ser invisivel.
       const fromLid = isLid(remoteJid);
+      const rawId = msg.key?.id ?? '';
+      // ★ SEGUNDA falha do MESMO id = o retry tambem nao decifrou = mensagem PERDIDA.
+      //
+      // Antes as duas contavam igual em `inbound_undecryptable_total`, e o operador nao
+      // tinha como distinguir "vai chegar no retry" de "sumiu". MEDIDO no beta: de 7
+      // mensagens nao decifradas, 5 nunca chegaram ao consumidor (71%) — mas o contador
+      // dizia so "10 falhas", sem revelar quantas eram perdas definitivas.
+      //
+      // O Set tem teto: sem ele, uma sessao de meses acumularia todo id que falhou.
+      const jaFalhou = this.decryptFalhou.has(rawId);
+      if (jaFalhou) {
+        this.decryptFalhou.delete(rawId);
+        // Este e o numero que responde "estou perdendo mensagem de cliente?".
+        inc('inbound_lost_total', live.name);
+        this.log.error(
+          { session: live.name, msgId: rawId, remoteJid, fromLid },
+          'mensagem PERDIDA: o retry tambem nao decifrou (sessao Signal precisa reparo)',
+        );
+        events.emit(
+          'error', live.name,
+          'Mensagem PERDIDA — o reenvio também não decifrou. Se repetir, repareie a sessão (QR novo).',
+          { msgId: rawId, de: remoteJid }, 'error',
+        );
+        return;
+      }
+      if (rawId) {
+        // Teto do Set: 500 ids em voo cobre qualquer rajada real. Ao encher, descarta
+        // os mais antigos — perder a marca de um id velho e melhor que crescer sem fim.
+        if (this.decryptFalhou.size >= 500) {
+          const primeiro = this.decryptFalhou.values().next().value;
+          if (primeiro !== undefined) this.decryptFalhou.delete(primeiro);
+        }
+        this.decryptFalhou.add(rawId);
+      }
       this.log.error(
-        { session: live.name, msgId: msg.key?.id, remoteJid, fromLid },
-        'mensagem NAO decifrada (Bad MAC / sessao Signal); perdida se o retry falhar',
+        { session: live.name, msgId: rawId, remoteJid, fromLid },
+        'mensagem NAO decifrada (Bad MAC / sessao Signal); pedindo reenvio',
       );
       events.emit(
         'error', live.name,
-        'Mensagem não decifrada — o WhatsApp deve reenviar; se repetir, a sessão precisa ser repareada',
-        { msgId: msg.key?.id, de: remoteJid }, 'error',
+        'Mensagem não decifrada — pedindo reenvio ao remetente',
+        { msgId: rawId, de: remoteJid }, 'warn',
       );
       // ★ O contador que teria denunciado o bug do LID no primeiro minuto, em vez
       // de esperar alguem mandar uma mensagem e notar que nao chegou.
