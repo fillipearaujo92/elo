@@ -251,9 +251,15 @@ describe('painel: glow do quadro seguindo o mouse', () => {
     // apagou a DECLARACAO passou verde, porque o regex casou com o texto do comentario.
     // Verificar declaracao lendo comentario e o mesmo que nao verificar.
     const cssLimpo = css.replace(/\/\*[\s\S]*?\*\//g, '');
-    const regra = cssLimpo.match(/\.lg-c::before\{[\s\S]*?pointer-events:none\}/)?.[0] ?? '';
-    assert.ok(regra, 'regra do glow nao encontrada');
-    assert.match(regra, /padding:1px/, 'sem padding nao ha moldura');
+    // ★ `.lg-glow::before`, nao `.lg-c::before`. As camadas SAIRAM do cartao para um
+    // wrapper, e o motivo esta medido com screenshot: o `.lg-c` tem background OPACO
+    // (pintado acima de um ::before posicionado, escondendo a moldura) e uma
+    // `animation` com transform (cria stacking context, prendendo o transbordo de
+    // inset negativo dentro do cartao). Os numeros nao denunciavam nada — a moldura
+    // reportava opacity:1 e simplesmente nao aparecia na tela.
+    const regra = cssLimpo.match(/\.lg-glow::before\{[\s\S]*?z-index:2\}/)?.[0] ?? '';
+    assert.ok(regra, 'regra da moldura nao encontrada');
+    assert.match(regra, /padding:3px/, 'sem padding nao ha anel recortado');
     // ★ O padrao SEM prefixo tem de existir por si. Uma mutacao que apagou
     // `mask-composite:exclude` deixando so o `-webkit-mask-composite:xor` passou por um
     // regex que casava os dois — e sem a versao padrao o Chrome atual nao recorta o
@@ -266,16 +272,59 @@ describe('painel: glow do quadro seguindo o mouse', () => {
   it('a posicao vem de --mx/--my com default (a tela abre viva)', () => {
     // Sem default, o contorno so acenderia apos o primeiro movimento do mouse — quem
     // abre a tela e nao mexe o mouse veria um cartao morto.
-    assert.match(css, /at var\(--mx,\s*50%\)\s+var\(--my,\s*0%\)/,
-      'o gradiente precisa de default para --mx/--my');
+    // As DUAS camadas precisam do default (uma sem ele nasceria no canto 0,0).
+    const usos = [...css.matchAll(/at var\(--mx,\s*50%\)\s+var\(--my,\s*0%\)/g)];
+    assert.equal(usos.length, 2, 'as duas camadas de luz precisam do default de --mx/--my');
+    // ★ `--gi` tambem precisa de fallback em TODO uso: dentro de um calc(), um var()
+    // sem valor invalida a declaracao inteira em silencio — e a camada desaparece sem
+    // erro no console. E a mesma armadilha do --ease documentada no topo deste arquivo.
+    assert.ok([...css.matchAll(/var\(--gi,\s*\.?\d/g)].length >= 4,
+      '--gi precisa de fallback em todo uso — calc() com var() vazio e descartado');
+  });
+
+  it('★ a intensidade sai da distancia ate a BORDA do campo, nao ao centro', () => {
+    // Medido: o input tem 284px de largura, e com a distancia ao CENTRO o mouse
+    // encostado na lateral do cartao — visualmente ao lado do campo — recebia
+    // --gi=0,115, praticamente o mesmo que o canto oposto da tela. Com a distancia a
+    // borda, o mesmo ponto da 0,700.
+    const fn = html.match(/function ligarGlow\(\)\{[\s\S]*?\n\}/)?.[0] ?? '';
+    assert.match(fn, /Math\.max\(cr\.left-alvo\.x,0,alvo\.x-cr\.right\)/,
+      'a distancia horizontal tem de ser ate a borda do campo');
+    assert.match(fn, /Math\.max\(cr\.top-alvo\.y,0,alvo\.y-cr\.bottom\)/,
+      'a distancia vertical tem de ser ate a borda do campo');
+    assert.ok(!/cr\.left\+cr\.width\/2/.test(fn),
+      'nao voltar para a distancia ao CENTRO — o campo e largo demais');
+  });
+
+  it('campo focado mantem a intensidade no maximo', () => {
+    // Quem digita a chave nao tem a mao no mouse: --gi congelaria num valor baixo e o
+    // quadro apagaria justamente durante o uso.
+    const fn = html.match(/function ligarGlow\(\)\{[\s\S]*?\n\}/)?.[0] ?? '';
+    assert.match(fn, /addEventListener\('focus'/, 'falta reagir ao foco do campo');
+    assert.match(fn, /setProperty\('--gi','1'\)/, 'o foco deve levar a intensidade a 1');
+    assert.match(fn, /addEventListener\('blur'/, 'ao sair do campo o mouse retoma');
+  });
+
+  it('as duas camadas de luz vivem no WRAPPER, nao no cartao', () => {
+    // Regressao com causa medida: no `.lg-c` o background opaco esconde a moldura e o
+    // transform da animacao de entrada prende o transbordo (stacking context).
+    assert.ok(!/\.lg-c::(before|after)\{/.test(css),
+      'as camadas nao podem voltar para o .lg-c — ver o comentario de .lg-glow no CSS');
+    assert.match(html, /<div class="lg-glow"><div class="lg-c">/,
+      'o cartao precisa estar dentro do wrapper de brilho');
   });
 
   it('★ a transicao e na OPACIDADE, nao na posicao', () => {
     // Interpolar --mx faria o halo arrastar atras do cursor com atraso — le como
     // travado. So o acender/apagar e suave.
-    const regra = css.match(/\.lg-c::before\{[\s\S]*?\}/)?.[0] ?? '';
-    assert.match(regra, /transition:opacity/, 'a transicao deve ser de opacidade');
-    assert.ok(!/transition:[^;]*--m/.test(regra), 'nao interpolar a posicao');
+    // Vale para as DUAS camadas de luz, nao so para a moldura.
+    const limpo = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    for (const sel of ['::before', '::after'] as const) {
+      const regra = limpo.match(new RegExp('\\.lg-glow' + sel + '\\{[\\s\\S]*?z-index:\\d\\}'))?.[0] ?? '';
+      assert.ok(regra, `regra .lg-glow${sel} nao encontrada`);
+      assert.match(regra, /transition:opacity/, `${sel}: a transicao deve ser de opacidade`);
+      assert.ok(!/transition:[^;]*--m/.test(regra), `${sel}: nao interpolar a posicao`);
+    }
   });
 
   it('o listener e no DOCUMENTO (a borda acende na aproximacao)', () => {

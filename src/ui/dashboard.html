@@ -505,24 +505,93 @@ a{color:inherit;text-decoration:none}
    o halo no topo, centrado — a tela abre com a borda já viva, sem esperar o
    primeiro movimento do mouse.
 
-   `transition` na opacidade e não na posição: interpolar --mx faria o halo
-   arrastar atrás do cursor com meio segundo de atraso, o que lê como travado.
-   A posição acompanha na hora; só o acender/apagar é suave. */
-.lg-c{position:relative}
-.lg-c::before{
-  content:'';position:absolute;inset:0;border-radius:inherit;padding:1px;
-  background:radial-gradient(120px circle at var(--mx,50%) var(--my,0%),
-    var(--sig) 0%,var(--sig-dim) 38%,transparent 72%);
-  /* Recorta o miolo: sobra a moldura. `-webkit-` primeiro para o Safari, que
-     ainda não entende `mask-composite:exclude` sem prefixo. */
+   `transition` na opacidade e na INTENSIDADE, nunca na posição: interpolar --mx
+   faria o halo arrastar atrás do cursor com meio segundo de atraso, o que lê
+   como travado. A posição acompanha na hora; só acender/apagar e a força é
+   suave.
+
+   ── A leitura pretendida: algo pressionando de dentro para fora ───────────
+   São DUAS camadas, e é a combinação delas que dá a sensação:
+
+     ::before  a moldura acesa (2px), recortada pela máscara. É o "vazamento"
+               no ponto da borda mais próximo do cursor.
+     ::after   o halo TRANSBORDANDO para fora do cartão (inset negativo, com
+               blur). É o que faz parecer que a luz escapa do quadro em vez de
+               estar pintada nele.
+
+   Uma camada só não passa a ideia: moldura sem transbordo lê como borda
+   colorida, e transbordo sem moldura lê como sombra descolada do objeto.
+
+   ── Por que a intensidade varia com a distância do INPUT ─────────────────
+   `--gi` (0 a 1) é calculado no JS a partir da distância do cursor até o
+   CENTRO DO CAMPO de chave, não até o cartão. O campo é a única coisa a fazer
+   nesta tela: quanto mais perto dele o mouse chega, mais o quadro reage — o
+   brilho vira uma pista de onde clicar, em vez de enfeite constante. */
+/* ── Onde as camadas de luz vivem, e por que NÃO no .lg-c ─────────────────
+   ★ Medido, com screenshot: pôr as duas camadas como pseudo-elementos do
+   próprio `.lg-c` NÃO funciona, por duas razões que se somam e que os números
+   não denunciam (a moldura reportava `opacity:1` e não aparecia na tela):
+
+     1. `.lg-c` tem `background:var(--ink-2)` OPACO. O fundo do elemento é
+        pintado ACIMA de um ::before posicionado, então a moldura ficava
+        escondida atrás do próprio cartão.
+     2. `.lg-c` tem `animation:lg-in` com `transform`, e transform cria
+        STACKING CONTEXT. Um ::after com inset negativo fica preso ao contexto
+        do pai — o transbordo "para fora" era recortado no limite do cartão e
+        lia como mancha interna atrás do input.
+
+   A saída é um WRAPPER sem fundo e sem transform (`.lg-glow`), que hospeda as
+   duas camadas atrás do cartão. O cartão continua opaco por cima; o que
+   escapa é só o que passa das bordas dele — que é a leitura pedida: luz
+   pressionando de dentro para fora. */
+.lg-glow{position:relative;width:100%;max-width:352px}
+/* ── Camada 1: a MOLDURA acesa (nítida, sobre a borda) ──────────────────── */
+.lg-glow::before{
+  content:'';position:absolute;
+  /* Estende 3px além do cartão e é recortada por máscara, deixando visível só
+     um anel de 3px em volta dele. Recortar aqui (e não contar com o cartão
+     cobrir o miolo) é o que garante o anel NÍTIDO: sem a máscara, o gradiente
+     preenchia o retângulo inteiro e só a franja de 3px aparecia — franja de
+     gradiente é fraca por definição, e era a causa do contorno apagado. */
+  inset:-3px;border-radius:15px;padding:3px;
+  /* O raio do foco cresce com --gi: perto do campo o vazamento é largo e
+     forte, longe fica um ponto discreto. */
+  background:radial-gradient(
+    calc(110px + 170px * var(--gi,.3)) circle at var(--mx,50%) var(--my,0%),
+    #b9ffd4 0%,
+    var(--sig) calc(8% + 14% * var(--gi,.3)),
+    var(--sig-dim) 46%,transparent 76%);
   -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
   -webkit-mask-composite:xor;
           mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
           mask-composite:exclude;
-  opacity:0;transition:opacity .45s var(--ease);pointer-events:none}
-.lg-c.glow-on::before{opacity:.85}
+  opacity:0;transition:opacity .4s var(--ease);pointer-events:none;z-index:2}
+.lg-glow.glow-on::before{opacity:calc(.7 + .3 * var(--gi,.3))}
+
+/* ── Camada 2: o transbordo para FORA (o "saindo de dentro") ────────────── */
+.lg-glow::after{
+  content:'';position:absolute;
+  /* Inset bem negativo + blur forte: a luz existe MUITO além do cartão, e é
+     isto que separa "algo escapando" de "borda pintada". */
+  inset:-40px;border-radius:30px;
+  background:radial-gradient(
+    calc(150px + 210px * var(--gi,.3)) circle at var(--mx,50%) var(--my,0%),
+    var(--sig) 0%,var(--sig) 18%,var(--sig-dim) 44%,transparent 74%);
+  /* O blur faz a luz ter volume em vez de forma. Custa GPU, então fica só nesta
+     camada (a moldura precisa de borda nítida) e é promovida com will-change
+     para o Chrome não repromover a cada quadro. */
+  filter:blur(26px);will-change:opacity;
+  /* A força acompanha --gi: longe do campo é um halo presente mas discreto;
+     sobre ele, o efeito domina. */
+  opacity:0;transition:opacity .5s var(--ease);pointer-events:none;z-index:0}
+.lg-glow.glow-on::after{opacity:calc(.45 + .55 * var(--gi,.3))}
+
+/* O cartão fica ENTRE as duas camadas: acima do transbordo (que é o halo
+   difuso por trás) e abaixo da moldura (que precisa desenhar sobre a borda). */
+.lg-glow>.lg-c{position:relative;z-index:1}
+
 @media (prefers-reduced-motion:reduce){
-  .lg-c::before{transition:none}
+  .lg-glow::before,.lg-glow::after{transition:none}
 }
 .lg-i{font-size:16px;color:var(--t1);letter-spacing:.34em;text-transform:uppercase;
   font-weight:500;
@@ -726,7 +795,7 @@ async function api(p,o={}){
 // ── Entrada ────────────────────────────────────────────────────────────────
 function login(err){
   document.body.style.overflow='auto'
-  $('app').innerHTML=`<div class="lg"><div class="lg-c">
+  $('app').innerHTML=`<div class="lg"><div class="lg-glow"><div class="lg-c">
    <svg class="mk-lg mk-entra" width="44" height="32" viewBox="0 0 44 32" aria-hidden="true" shape-rendering="geometricPrecision"><g fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"><circle class="e1" cx="15" cy="16" r="11"/><circle class="e2" cx="29" cy="16" r="11" opacity=".45"/></g></svg>
    <div class="lg-i">ELO</div>
    <div class="lg-v" id="lgv">${VER.v?esc(verLabel()):'&nbsp;'}</div>
@@ -739,7 +808,7 @@ function login(err){
    </div>
    <div class="lg-b"><button id="g">entrar</button></div>
    <div class="lg-f">acesso ao painel de operação das sessões</div>
-  </div></div>`
+  </div></div></div>`
 
   const inp=$('k'), btn=$('g'), erro=$('lge')
 
@@ -784,18 +853,33 @@ function login(err){
  * para coordenada relativa ao cartão, e pode ficar fora de 0–100%: é o que faz
  * o brilho girar pela moldura conforme o mouse contorna o quadro por fora.
  *
- * Escreve em `--mx/--my` dentro de requestAnimationFrame e no máximo uma vez por
- * quadro. `mousemove` dispara muito mais que 60x/s, e cada escrita numa custom
+ * Escreve em `--mx/--my/--gi` dentro de requestAnimationFrame e no máximo uma vez
+ * por quadro. `mousemove` dispara muito mais que 60x/s, e cada escrita numa custom
  * property usada por gradiente força repaint — sem o coalescing o efeito fica
  * mais caro que o resto da tela inteira.
+ *
+ * `--gi` (0 a 1) é a INTENSIDADE, e sai da distância do cursor até o centro do
+ * CAMPO DE CHAVE — não até o cartão. O campo é a única coisa a fazer nesta tela;
+ * amarrar a força do brilho a ele transforma o efeito em pista de onde clicar em
+ * vez de enfeite constante. O CSS usa --gi no raio do gradiente, na dureza do
+ * núcleo e na opacidade do transbordo, então um único número controla as duas
+ * camadas de luz.
  *
  * Respeita prefers-reduced-motion: quem pediu menos movimento não recebe um
  * brilho perseguindo o cursor.
  */
 function ligarGlow(){
-  const card=document.querySelector('.lg-c')
+  // O alvo e o WRAPPER, nao o cartao: e nele que as camadas de luz vivem (ver o
+  // comentario de .lg-glow no CSS — background opaco e stacking context do cartao
+  // escondiam a moldura e prendiam o transbordo).
+  const card=document.querySelector('.lg-glow')
   if(!card)return
   if(window.matchMedia&&matchMedia('(prefers-reduced-motion:reduce)').matches)return
+
+  // Distância (até a BORDA do campo) em que o brilho começa a reagir. 190px cobre
+  // o cartão inteiro a partir do campo, então entrando por qualquer lado o efeito
+  // JÁ está subindo, em vez de acender de repente só sobre o input.
+  const ALCANCE=190
 
   let alvo=null,agendado=false
   const pintar=()=>{
@@ -805,6 +889,25 @@ function ligarGlow(){
     if(!r.width||!r.height)return
     card.style.setProperty('--mx',((alvo.x-r.left)/r.width*100).toFixed(2)+'%')
     card.style.setProperty('--my',((alvo.y-r.top)/r.height*100).toFixed(2)+'%')
+
+    // ── Intensidade pela proximidade do CAMPO ────────────────────────────
+    // O alvo é o campo de chave; se ele não existir (tela em outro estado),
+    // cai para o centro do cartão em vez de sumir com o efeito.
+    const campo=document.getElementById('k')
+    const cr=(campo&&campo.getBoundingClientRect())||r
+    // ★ Distância até a BORDA do campo, não até o centro. Medido: o input tem 284px
+    // de largura, então com a distância ao centro o mouse encostado na lateral do
+    // cartão — visualmente AO LADO do campo — ficava a ~170px e recebia --gi=0,115,
+    // quase o mesmo que o canto oposto da tela. A distância à borda dá 0 sobre o
+    // campo e cresce igual em todas as direções, que é o que a leitura pede.
+    const dx=Math.max(cr.left-alvo.x,0,alvo.x-cr.right)
+    const dy=Math.max(cr.top-alvo.y,0,alvo.y-cr.bottom)
+    const d=Math.hypot(dx,dy)
+    // 1 sobre o campo, 0 a partir de ALCANCE. `**2` faz a subida ser lenta longe
+    // e acelerar perto: linear dava a impressão de brilho constante, porque a
+    // maior parte do trajeto do mouse fica na faixa média.
+    const gi=Math.max(0,1-d/ALCANCE)**2
+    card.style.setProperty('--gi',gi.toFixed(3))
   }
   const mover=e=>{
     alvo={x:e.clientX,y:e.clientY}
@@ -826,6 +929,24 @@ function ligarGlow(){
     obs.disconnect()
   })
   obs.observe(document.getElementById('app'),{childList:true,subtree:true})
+
+  // ── Campo focado mantém o brilho forte ─────────────────────────────────
+  // Quem está digitando a chave não tem a mão no mouse: o cursor fica parado
+  // onde estava e --gi congelaria num valor baixo, apagando o quadro justamente
+  // no momento de uso. Com foco, a intensidade vai a 1 e o CSS assume.
+  const campo=document.getElementById('k')
+  if(campo){
+    campo.addEventListener('focus',()=>{
+      card.classList.add('glow-on')
+      card.style.setProperty('--gi','1')
+    })
+    // Ao sair do campo, devolve o controle ao mouse: repinta com a posição atual
+    // em vez de deixar --gi travado em 1.
+    campo.addEventListener('blur',()=>{
+      if(alvo){if(!agendado){agendado=true;requestAnimationFrame(pintar)}}
+      else card.style.setProperty('--gi','.35')
+    })
+  }
 
   // Acende já, sem esperar o primeiro movimento (a tela abre viva).
   card.classList.add('glow-on')
