@@ -167,6 +167,59 @@ describe('independencia: instalavel em qualquer servidor', () => {
     assert.deepEqual(achados, [], `infra fixada no produto:\n${achados.join('\n')}`);
   });
 
+  it('★ NENHUM arquivo do repositorio expoe infra de quem desenvolve', () => {
+    // ★ O teste acima varre so `src/`. Isto varre o REPOSITORIO INTEIRO, e existe por
+    // um caso real: o repo carregava `deploy/` com o IP de uma VPS (76.13.225.96),
+    // hostnames de rede Docker (`beta-db`, `sysled-beta_beta_net`), o dominio do
+    // ambiente e o caminho no servidor. O repositorio do ELO e PUBLICO — isso ficava
+    // indexado e permanente, e nao servia para ninguem que instalasse o gateway.
+    //
+    // Os scripts foram para fora do repositorio (ver scripts/ para o que e generico).
+    // Este teste impede que voltem: um `deploy/algo.sh` novo com IP passaria pelo teste
+    // anterior, porque ele nao olha fora de src/.
+    //
+    // O que e permitido, e por que: enderecos de LOOPBACK e faixas PRIVADAS aparecem
+    // legitimamente nas guardas de SSRF (o net-guard precisa nomea-las para bloquear) e
+    // em exemplo de configuracao local.
+    const ignorar = new Set(['node_modules', '.git', 'dist', 'coverage', '.github']);
+    const suspeitos: Array<[string, number, string]> = [];
+    const paraVarrer = fileURLToPath(new URL('../', import.meta.url));
+
+    const varre = (dir: string): void => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        if (ignorar.has(e.name)) continue;
+        const p = join(dir, e.name);
+        if (e.isDirectory()) { varre(p); continue; }
+        if (!/\.(ts|js|mjs|cjs|sql|html|md|ya?ml|sh|json|example|Dockerfile)$/i.test(e.name)
+            && e.name !== 'Dockerfile') continue;
+        let texto: string;
+        try { texto = readFileSync(p, 'utf8'); } catch { continue; }
+        // Este proprio teste cita os padroes que proibe. E os testes da guarda de rede
+        // (net-guard, link-preview) existem para CLASSIFICAR faixas de IP: eles precisam
+        // nomear 8.8.8.8, 172.15.0.1, 224.0.0.1 e afins. Excluir os arquivos inteiros e
+        // mais honesto que tentar adivinhar quais literais sao legitimos linha a linha.
+        if (/independencia\.test|net-guard|link-preview/.test(p)) continue;
+        for (const [i, linha] of texto.split('\n').entries()) {
+          // Loopback, faixas privadas e metadata de nuvem: legitimos (guardas de SSRF,
+          // bind local, exemplo de configuracao).
+          if (/127\.0\.0\.1|0\.0\.0\.0|localhost|169\.254\.169\.254|10\.0\.0\.0|172\.16|192\.168|100\.64|255\.255/.test(linha)) continue;
+          // IP publico literal, ou hostname/dominio de um ambiente especifico.
+          const temIpPublico = /\b(?!0)\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/.test(linha);
+          const temHostInterno = /\bbeta-db\b|sysled-beta|zap-beta|\/opt\/wa-gateway/.test(linha);
+          if (temIpPublico || temHostInterno) {
+            suspeitos.push([p.replace(paraVarrer, ''), i + 1, linha.trim().slice(0, 84)]);
+          }
+        }
+      }
+    };
+    varre(paraVarrer);
+
+    assert.deepEqual(
+      suspeitos.map(([f, l, t]) => `${f}:${l}: ${t}`), [],
+      'infra de quem desenvolve NAO pode viver no repositorio publico do ELO',
+    );
+  });
+
   it('o schema do banco vive em schema DEDICADO (nao no do consumidor)', () => {
     // O ELO e servico externo: cravar as tabelas no schema da aplicacao que o consome
     // acoplaria as duas migrations e, com PgBouncer em transaction-mode, ainda abriria
