@@ -169,10 +169,15 @@ describe('independencia: instalavel em qualquer servidor', () => {
 
   it('★ NENHUM arquivo do repositorio expoe infra de quem desenvolve', () => {
     // ★ O teste acima varre so `src/`. Isto varre o REPOSITORIO INTEIRO, e existe por
-    // um caso real: o repo carregava `deploy/` com o IP de uma VPS (76.13.225.96),
-    // hostnames de rede Docker (`beta-db`, `sysled-beta_beta_net`), o dominio do
-    // ambiente e o caminho no servidor. O repositorio do ELO e PUBLICO — isso ficava
-    // indexado e permanente, e nao servia para ninguem que instalasse o gateway.
+    // um caso real: o repo carregava scripts de deploy com o IP PUBLICO de uma VPS,
+    // hostnames de rede Docker interna, o dominio do ambiente e o caminho de instalacao
+    // no servidor. O repositorio do ELO e PUBLICO — isso ficava indexado e permanente, e
+    // nao servia para ninguem que instalasse o gateway.
+    //
+    // ★★ E este comentario NAO repete os valores. A primeira versao dele citava o IP
+    // literal para "documentar o incidente" — e a propria varredura pegou, o que estava
+    // certo: um dado exposto num comentario esta igualmente exposto. Descrever a CLASSE
+    // do dado ensina a mesma licao sem republica-lo.
     //
     // Os scripts foram para fora do repositorio (ver scripts/ para o que e generico).
     // Este teste impede que voltem: um `deploy/algo.sh` novo com IP passaria pelo teste
