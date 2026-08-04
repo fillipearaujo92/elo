@@ -2,10 +2,10 @@
 //
 // Endpoints de envio no formato WAHA: sendText, sendImage, sendVoice, sendVideo, sendFile.
 //
-// Contrato do retorno: o driver do consumidor:extractMsgId() aceita `id` como STRING
-// direto (caminho GOWS) — devolvemos o id serializado como string em `id`, e o driver
-// considera ok apenas quando ha id (`ok: res.ok && id`). Retornar 200 sem id faz o
-// backend marcar a mensagem como falha.
+// ── Contrato do retorno ───────────────────────────────────────────────────
+// A resposta traz `id` como STRING (o id serializado da mensagem). Isso e parte do
+// contrato, nao detalhe: um consumidor considera o envio bem-sucedido apenas quando ha
+// id — responder 200 SEM id faz a mensagem ser marcada como falha do outro lado.
 
 import { Boom } from '@hapi/boom';
 import type { AnyMessageContent } from 'baileys';
@@ -297,7 +297,7 @@ export function registerSendRoutes(app: FastifyInstance, { sessions }: Deps): vo
     throw new Boom('file precisa de url ou data', { statusCode: 400 });
   }
 
-  /** Envia e devolve o corpo no formato que extractMsgId() entende. */
+  /** Envia e devolve o corpo no formato do contrato (ver o topo do arquivo). */
   async function send(
     session: string,
     jid: string,
@@ -345,7 +345,7 @@ export function registerSendRoutes(app: FastifyInstance, { sessions }: Deps): vo
 
     const id = serializeMsgId(sent.key);
     return {
-      // `id` string: extractMsgId retorna direto (o driver do consumidor).
+      // `id` como string simples: o caminho mais direto para quem le o retorno.
       id,
       // _data espelha o shape do WAHA para consumidores que leem dali.
       _data: { id: { id: sent.key.id, _serialized: id }, Info: { ID: sent.key.id } },
@@ -693,7 +693,7 @@ export function registerSendRoutes(app: FastifyInstance, { sessions }: Deps): vo
   });
 
   // POST /api/sendFile — documento/anexo.
-  // Tambem e o fallback do driver quando sendVideo falha (o driver do consumidor), entao precisa
+  // Tambem e o fallback do driver quando sendVideo falha (ver docs/INTEGRACAO.md), entao precisa
   // aceitar qualquer mimetype.
   app.post<{ Body: SendBody }>('/api/sendFile', async (req) => {
     const alvo = prepare(req.body);

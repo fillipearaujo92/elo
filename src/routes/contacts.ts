@@ -1,9 +1,10 @@
 // src/routes/contacts.ts
 //
-// check-exists, contacts e lids/{lid}. Os tres sao dependencias diretas do driver:
-//   - check-exists  -> resolveSendTarget decide o chatId real do destino (o driver do consumidor)
-//   - lids/{lid}    -> resolveLidToPhone; sem isso o contato nasce com o id oculto
-//                      no lugar do telefone e o consultor NAO consegue responder
+// check-exists, contacts e lids/{lid}. Os tres existem porque um consumidor precisa
+// resolver IDENTIDADE antes de enviar ou de criar o contato:
+//   - check-exists  -> o numero tem WhatsApp? Devolve o chatId real do destino
+//   - lids/{lid}    -> traduz LID (id oculto) para telefone; sem isso o contato nasce
+//                      com o id no lugar do numero e ninguem consegue responder
 //   - contacts      -> nome do contato (pushname), best-effort
 
 import type { FastifyInstance } from 'fastify';
@@ -18,7 +19,7 @@ export function registerContactRoutes(app: FastifyInstance, { sessions }: Deps):
   // GET /api/contacts/check-exists?phone=...&session=...
   // Resposta do WAHA: { numberExists: boolean, chatId?: string }.
   // O driver usa o chatId retornado como destino de envio — no GOWS alguns contatos
-  // existem so como @lid e o JID de telefone NAO entrega (o driver do consumidor).
+  // existem so como @lid e o JID de telefone NAO entrega (ver docs/INTEGRACAO.md).
   app.get<{ Querystring: { phone?: string; session?: string } }>(
     '/api/contacts/check-exists',
     async (req, reply) => {
@@ -61,7 +62,7 @@ export function registerContactRoutes(app: FastifyInstance, { sessions }: Deps):
 
   // GET /api/contacts?contactId=...&session=...
   // O driver tenta este endpoint como fallback WEBJS de resolucao de LID e para
-  // pegar o nome (o driver do consumidor). Ele le id/_serialized, verifiedName, name, pushname.
+  // pegar o nome (ver docs/INTEGRACAO.md). Ele le id/_serialized, verifiedName, name, pushname.
   app.get<{ Querystring: { contactId?: string; session?: string } }>(
     '/api/contacts',
     async (req, reply) => {
@@ -94,7 +95,7 @@ export function registerContactRoutes(app: FastifyInstance, { sessions }: Deps):
   );
 
   // GET /api/{session}/lids/{lid} -> { lid, pn: "<numero>@c.us" }
-  // Shape exato lido pelo driver (o driver do consumidor): campo `pn`.
+  // Shape exato lido pelo driver (ver docs/INTEGRACAO.md): campo `pn`.
   app.get<{ Params: { session: string; lid: string } }>(
     '/api/:session/lids/:lid',
     async (req, reply) => {

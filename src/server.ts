@@ -276,7 +276,7 @@ const healthHandler = async (): Promise<Record<string, unknown>> => {
   // Health check real: valida o banco, nao apenas o processo. Um gateway que perdeu
   // o Postgres nao consegue restaurar sessao nem gravar creds — nao esta saudavel.
   await pool.query('SELECT 1');
-  // `engine` e lido pelo driver do backend; version/commit sao do painel.
+  // `engine` e lido pelo driver de quem consome; version/commit sao do painel.
   return { status: 'ok', engine: 'BAILEYS', version: VERSION, commit: COMMIT };
 };
 app.get('/health', healthHandler);
@@ -551,7 +551,7 @@ app.get<{ Params: { session: string; filename: string } }>(
   async (req, reply) => {
     const buf = await media.read(req.params.session, req.params.filename);
     if (!buf) return reply.code(404).send({ message: 'arquivo nao encontrado' });
-    // O backend le o content-type da resposta para decidir a extensao (o driver do consumidor).
+    // O backend le o content-type da resposta para decidir a extensao (ver docs/INTEGRACAO.md).
     return reply.type(guessType(req.params.filename)).send(buf);
   },
 );

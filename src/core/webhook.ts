@@ -1,14 +1,22 @@
 // src/core/webhook.ts
 //
-// Emissor de webhooks no formato WAHA. O consumidor e o endpoint de webhook que o consumidor expoe
-// (waha.js), que:
-//   1. exige `session` no corpo (401 sem isso);
-//   2. exige o header X-Webhook-Key igual a waha.api_key (fail-closed 401);
-//   3. passa o corpo inteiro por translateWahaEvent().
+// Emissor de webhooks no dialeto do WAHA — o ELO fala esse formato para poder ser
+// instalado NO LUGAR do WAHA, sem que o sistema consumidor precise de um driver novo.
 //
-// Entrega: retry com backoff. O backend responde 200 rapido e processa async, mas
-// pode estar reiniciando (deploy) — perder uma mensagem inbound e inaceitavel, e o
-// WAHA real tambem faz retry (o driver configura retries: 15x/2s, ver o driver do consumidor).
+// ── O contrato, do lado de quem recebe ────────────────────────────────────
+// O ELO faz POST com o corpo `{ event, session, payload }` para cada URL configurada
+// em `config.webhooks[]` da sessao. O receptor precisa apenas:
+//   1. responder 2xx rapido (o processamento pesado deve ser assincrono);
+//   2. aceitar os headers de `customHeaders`, se a sessao definir algum — e por ali que
+//      passa a chave de webhook, que o receptor usa para autenticar a chamada.
+//
+// Nada aqui presume QUAL sistema esta do outro lado: o ELO e um servico independente,
+// instalado como a Evolution ou o WAHA, e serve qualquer chat omnichannel que aceite
+// esse formato.
+//
+// Entrega: retry com atraso fixo. O receptor pode estar reiniciando (deploy), e perder
+// mensagem inbound e inaceitavel — o WAHA real tambem retenta. Defaults abaixo; a sessao
+// pode sobrescrever em `retries`.
 
 import type { Logger } from 'pino';
 import { events } from './events.js';
@@ -88,7 +96,7 @@ export class WebhookEmitter {
     );
   }
 
-  // events ausente/vazio = assina TODOS (comportamento do WAHA). O driver do backend
+  // events ausente/vazio = assina TODOS (comportamento do WAHA). O driver de quem consome
   // sempre manda ['message','message.ack','session.status'] explicitamente.
   private subscribes(w: WebhookConfig, event: string): boolean {
     if (!w.events?.length) return true;
@@ -102,7 +110,7 @@ export class WebhookEmitter {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     // customHeaders e o mecanismo pelo qual o backend recebe X-Webhook-Key. Sem
     // isso, TODA mensagem inbound toma 401 e desaparece silenciosamente — bug ja
-    // vivido em producao com o WAHA (documentado em o driver do consumidor).
+    // vivido em producao com o WAHA (documentado no driver de quem consome).
     for (const h of w.customHeaders ?? []) {
       if (h?.name) headers[h.name] = h.value ?? '';
     }

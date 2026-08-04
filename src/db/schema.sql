@@ -32,12 +32,12 @@ END $$;
 
 CREATE SCHEMA IF NOT EXISTS elo;
 
--- Sessoes: uma linha por canal. `name` e o identificador tecnico que o
--- backend manda em todo request (channels.identifier — ver o driver do consumidor).
+-- Sessoes: uma linha por canal. `name` e o identificador tecnico que quem consome
+-- manda em todo request para dizer de QUAL canal se trata.
 CREATE TABLE IF NOT EXISTS elo.sessions (
   -- `name` e o IDENTIFICADOR TECNICO (slug): entra em URL, caminho de midia e
-  -- chaves do auth state. Sempre [a-z0-9-]. Continua sendo a PK e o valor que o
-  -- sistema consumidor manda em todo request (channels.identifier).
+  -- chaves do auth state. Sempre [a-z0-9-]. E a PK, e o valor que quem consome envia
+  -- em todo request — tipicamente o identificador do canal no sistema dele.
   name          TEXT PRIMARY KEY,
   -- Ultimo status conhecido, no vocabulario do WAHA (WORKING|STARTING|SCAN_QR_CODE|FAILED|STOPPED).
   status        TEXT NOT NULL DEFAULT 'STOPPED',
@@ -45,8 +45,8 @@ CREATE TABLE IF NOT EXISTS elo.sessions (
   me_id         TEXT,
   me_push_name  TEXT,
   -- config JSONB guarda os webhooks (url, events, customHeaders) e ignore.groups,
-  -- exatamente como o WAHA aceita em POST/PUT /api/sessions. O driver do backend
-  -- faz PUT preservando o resto do config (o driver do consumidor), entao guardamos o
+  -- exatamente como o WAHA aceita em POST/PUT /api/sessions. O driver de quem consome
+  -- faz PUT preservando o resto do config (ver docs/INTEGRACAO.md), entao guardamos o
   -- objeto inteiro em vez de colunas separadas.
   config        JSONB NOT NULL DEFAULT '{}'::jsonb,
   -- start=true significa "esta sessao deve estar no ar": usado para restaurar no boot.
@@ -118,7 +118,7 @@ CREATE INDEX IF NOT EXISTS sent_messages_created_idx
   ON elo.sent_messages (created_at);
 
 -- Mapa LID -> telefone. GOWS/WAHA expoem GET /api/{session}/lids/{lid} e o backend
--- DEPENDE disso (o receptor de webhook do consumidor): sem resolver o LID, o contato nasce com o id
+-- DEPENDE disso (ver docs/INTEGRACAO.md): sem resolver o LID, o contato nasce com o id
 -- oculto no lugar do numero e o consultor nao consegue responder. O Baileys entrega
 -- o par (lid, pn) nos eventos de contato/mensagem; persistimos para servir o endpoint.
 CREATE TABLE IF NOT EXISTS elo.lid_map (

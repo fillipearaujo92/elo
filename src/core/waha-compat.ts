@@ -2,10 +2,13 @@
 //
 // Traducao PURA (sem rede/DB) Baileys -> shapes da API do WAHA.
 //
-// Este modulo e a especificacao de compatibilidade do gateway. O sistema consumidor
-// consome estes shapes em o tradutor do consumidor e
-// a maquina de reconexao do consumidor. Qualquer divergencia aqui quebra o
-// consumidor em producao, entao cada decisao abaixo referencia o consumidor.
+// Este modulo e a ESPECIFICACAO DE COMPATIBILIDADE do gateway: e o que permite o ELO
+// ocupar o lugar do WAHA sem que o sistema consumidor troque de driver.
+//
+// Quem consome le estes shapes em dois lugares: o tradutor que recebe os webhooks e a
+// maquina que decide reconexao. Divergir aqui quebra o consumidor EM PRODUCAO, e nao no
+// build — por isso cada decisao abaixo registra o motivo e o valor esperado, em vez de
+// so o codigo.
 //
 // Sem I/O de proposito: tudo aqui e testavel isolado (tests/waha-compat.test.ts).
 
@@ -13,9 +16,10 @@ import { DisconnectReason, getContentType, getDevice } from 'baileys';
 import type { proto, WAMessage } from 'baileys';
 
 // ── Status de sessao ────────────────────────────────────────────────────────
-// O backend le `status` em connectionState() (o driver do consumidor) e a maquina de
-// reconexao (a maquina de reconexao do consumidor) faz decisoes por string exata. Estes 5 valores
-// sao o vocabulario COMPLETO que ela entende:
+// Quem consome le `status` em connectionState(), e a maquina de reconexao decide por
+// STRING EXATA — nao por faixa nem por prefixo. Estes 5 valores sao o vocabulario
+// COMPLETO; inventar um sexto faz o consumidor cair no caso default, que costuma ser
+// "nao sei o que fazer, nao faz nada":
 //   WORKING       -> conectado (action: recovered)
 //   STARTING      -> transiente, nunca alerta (action: idle)
 //   SCAN_QR_CODE  -> logout, so humano resolve com QR (action: alert_qr)
@@ -29,7 +33,7 @@ export type WahaSessionStatus =
   | 'FAILED';
 
 // ── ACK ────────────────────────────────────────────────────────────────────
-// o tradutor do consumidormapeia ACK_MAP = {0,1:'sent', 2:'delivered', 3,4:'read', -1:'failed'}.
+// Um consumidor tipico mapeia ACK_MAP = {0,1:'sent', 2:'delivered', 3,4:'read', -1:'failed'}.
 // O Baileys entrega proto.WebMessageInfo.Status como enum:
 //   ERROR=0, PENDING=1, SERVER_ACK=2, DELIVERY_ACK=3, READ=4, PLAYED=5
 // Precisamos converter para a ESCALA DO WAHA (nao repassar o numero do Baileys),
@@ -70,7 +74,7 @@ export function wahaAckName(ack: number): string {
 //
 //  1. Envio: o extrator de id do driver le a resposta do send. Ele aceita `id` string
 //     direto (caminho GOWS), entao devolvemos o id SERIALIZADO como string.
-//  2. ACK: applyAck() (o receptor de webhook do consumidor) recebe o id do evento e normaliza
+//  2. ACK: o receptor do webhook recebe o id do evento e normaliza
 //     fazendo split('_').pop() para tambem casar o id CRU.
 //
 // Logo, o formato serializado "<fromMe>_<chatId>_<rawId>" satisfaz os dois: o envio
@@ -89,9 +93,9 @@ export function serializeMsgId(key: {
 
 // ── JIDs ───────────────────────────────────────────────────────────────────
 // O Baileys fala @s.whatsapp.net; o WAHA (e o WhatsApp Web) fala @c.us. O backend
-// espera @c.us: o tradutor do consumidordetecta @lid pelo sufixo e o resolveSendTarget
-// (o driver do consumidor) monta `${digits}@c.us`. Grupos sao @g.us nos dois. @lid passa intacto
-// porque e um id oculto que NAO pode ser reescrito (o driver do consumidor).
+// espera @c.us: o consumidor detecta @lid pelo sufixo e monta `${digits}@c.us` ao enviar.
+// Grupos sao @g.us nos dois. @lid passa intacto porque e um id oculto que NAO pode ser
+// reescrito.
 export function toWahaChatId(jid: string): string {
   if (!jid) return '';
 
@@ -138,10 +142,10 @@ export function toBaileysJid(chatId: string): string {
 }
 
 // ── Tipo de mensagem ───────────────────────────────────────────────────────
-// o tradutor do consumidormapeia payload.type para o message_type interno:
+// O consumidor mapeia payload.type para o seu message_type interno:
 //   image|video|audio|ptt|document|sticker, e qualquer outro vira 'text'.
 // 'ptt' e o que faz o audio virar voice note. As notificacoes de SISTEMA precisam
-// cair na lista SYSTEM_TYPES do backend (o tradutor do consumidor) para NAO virarem
+// cair na lista de tipos de SISTEMA do consumidor, para NAO virarem
 // bolha em branco na conversa — por isso emitimos 'e2e_notification'/'protocol'/
 // 'revoked'/'ciphertext' com esses nomes exatos.
 export type WahaMessageType =
@@ -225,7 +229,7 @@ function hasUserContent(content: proto.IMessage): boolean {
 }
 
 // ── Corpo da mensagem ──────────────────────────────────────────────────────
-// o tradutor do consumidor usa `payload.body` como texto (e como caption quando ha midia).
+// O consumidor usa `payload.body` como texto (e como caption quando ha midia).
 export function extractBody(msg: WAMessage): string {
   const c = msg.message;
   if (!c) return '';
@@ -262,9 +266,10 @@ export function extractMediaMeta(
 }
 
 // ── Desconexao: logout vs transiente ───────────────────────────────────────
-// A distincao mais importante para a resiliencia. a maquina de reconexao do consumidor:49 decide:
-//   hasMe === false  -> alert_qr (nunca auto-start; so humano com QR resolve)
-//   hasMe === true   -> start com backoff (queda transiente)
+// A distincao mais importante para a resiliencia. Do lado de quem consome, a decisao
+// costuma ser por `hasMe` (o numero segue pareado?):
+//   hasMe === false  -> alertar para QR (nunca auto-start; so humano com QR resolve)
+//   hasMe === true   -> reconectar com backoff (queda transiente)
 // Se marcarmos logout como transiente, o gateway entra em loop gerando QR novo.
 // Se marcarmos transiente como logout, o operador e incomodado sem necessidade.
 export function isLogoutReason(statusCode: number | null | undefined): boolean {

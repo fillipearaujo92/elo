@@ -18,6 +18,11 @@ your system  ──HTTP──▶  ELO  ──▶  WhatsApp
              ◀─webhook──
 ```
 
+**Drop-in for WAHA.** ELO speaks the WAHA dialect on purpose: the same endpoint names,
+the same event shapes, the same session vocabulary. If your chat platform already talks
+to WAHA, point it at ELO and it works — no new driver, no code change on your side. Any
+omnichannel system that can call a REST API and receive a webhook can use it.
+
 > ### ⚠️ Read this first
 >
 > ELO uses [Baileys](https://github.com/WhiskeySockets/Baileys), an **unofficial**

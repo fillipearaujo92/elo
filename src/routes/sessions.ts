@@ -1,9 +1,10 @@
 // src/routes/sessions.ts
 //
-// Endpoints de sessao no formato WAHA. Consumidos por:
-//   - o driver do consumidorconnectionState, start, ensureSessionAndQR, deleteInstance,
-//     setIgnoreGroups
-//   - routes/channels.js do backend (criacao de canal e QR na UI)
+// Endpoints de sessao no formato WAHA — o ciclo de vida do canal:
+//   criar/atualizar (POST/PUT), start, stop, restart, remover, QR, ignorar grupos.
+//
+// Um driver tipico usa isto para: consultar o estado do canal, subir a sessao, obter o
+// QR de pareamento e remover a instancia. Nada aqui presume qual sistema chama.
 
 import type { FastifyInstance } from 'fastify';
 import { snapshot } from '../core/metrics.js';
@@ -19,7 +20,7 @@ interface Deps {
 export function registerSessionRoutes(app: FastifyInstance, { sessions }: Deps): void {
   // POST /api/sessions — cria (e opcionalmente inicia) a sessao.
   // O driver manda { name, start: true, config: { webhooks: [...] } } e trata 422
-  // "already exists" como benigno (o driver do consumidor), reaplicando o config via PUT.
+  // "already exists" como benigno (ver docs/INTEGRACAO.md), reaplicando o config via PUT.
   app.post<{ Body: { name?: string; label?: string; start?: boolean; config?: SessionConfig } }>(
     '/api/sessions',
     async (req, reply) => {
@@ -30,9 +31,9 @@ export function registerSessionRoutes(app: FastifyInstance, { sessions }: Deps):
       // texto como `label` e derivamos um slug seguro para uso técnico (URL,
       // caminho de mídia, chaves do auth state). Ver src/core/slug.ts.
       //
-      // Compatibilidade: quando o nome JÁ é um slug válido (é o caso do backend
-      // do consumidor, que envia channels.identifier slugificado), usamos como está —
-      // assim nada muda para quem já integra.
+      // Compatibilidade: quando o nome JÁ é um slug válido — o caso de quem envia o
+      // identificador do canal já slugificado — usamos como está, então nada muda para
+      // quem já integra.
       const v = validateName(raw);
       if (!v.ok) return reply.code(400).send({ message: v.error });
       const label = req.body?.label?.trim() || v.name;
@@ -274,7 +275,8 @@ export function registerSessionRoutes(app: FastifyInstance, { sessions }: Deps):
     },
   );
 
-  // GET /api/sessions/{session} — status. Le por connectionState() do driver.
+  // GET /api/sessions/{session} — status do canal. E a rota que um driver consulta
+  // para saber se o canal esta no ar.
   app.get<{ Params: { session: string } }>('/api/sessions/:session', async (req, reply) => {
     const desc = await sessions.describe(req.params.session);
     if (!desc) return reply.code(404).send({ message: 'sessao nao encontrada' });
@@ -301,7 +303,7 @@ export function registerSessionRoutes(app: FastifyInstance, { sessions }: Deps):
   });
 
   // POST /api/sessions/{session}/start e /restart.
-  // O driver tenta /restart e cai para /start (o driver do consumidor), entao os dois existem.
+  // O driver tenta /restart e cai para /start (ver docs/INTEGRACAO.md), entao os dois existem.
   for (const path of ['/api/sessions/:session/start', '/api/sessions/:session/restart']) {
     app.post<{ Params: { session: string } }>(path, async (req, reply) => {
       const name = req.params.session;
@@ -309,7 +311,7 @@ export function registerSessionRoutes(app: FastifyInstance, { sessions }: Deps):
       if (!row) return reply.code(404).send({ message: 'sessao nao encontrada' });
 
       // Responde imediatamente: subir o socket leva segundos e o driver so quer
-      // saber se o comando foi ACEITO (`accepted`, o driver do consumidor).
+      // saber se o comando foi ACEITO (`accepted`, o driver de quem consome).
       const isRestart = path.endsWith('/restart');
       const action = isRestart ? sessions.restart(name) : sessions.start(name);
       action.catch((err) =>
@@ -329,7 +331,7 @@ export function registerSessionRoutes(app: FastifyInstance, { sessions }: Deps):
 
   // GET /api/{session}/auth/qr — QR como PNG.
   // O driver manda Accept: application/json e espera { mimetype, data } com data =
-  // base64 do PNG (o driver do consumidor). Com outro Accept devolvemos o PNG binario.
+  // base64 do PNG (ver docs/INTEGRACAO.md). Com outro Accept devolvemos o PNG binario.
   app.get<{ Params: { session: string } }>('/api/:session/auth/qr', async (req, reply) => {
     const name = req.params.session;
     const live = sessions.getLive(name);

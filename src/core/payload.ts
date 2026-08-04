@@ -90,19 +90,24 @@ export function buildMessagePayload(
 
   const payload: Record<string, unknown> = {
     id: serializeMsgId(key),
-    // `chatName` e o campo que o tradutor do consumidor le para o nome do grupo
-    // (o tradutor do consumidor). So faz sentido em grupo.
+    // `chatName` carrega o ASSUNTO do grupo — e o campo que o consumidor le para
+    // nomear a conversa. So faz sentido em grupo; fora dele o nome vem de notifyName.
     ...(isGroup && opts.groupSubject ? { chatName: opts.groupSubject } : {}),
     timestamp: normalizeTimestamp(msg.messageTimestamp),
     from,
     fromMe: !!key.fromMe,
     body: extractBody(msg),
     type,
-    // notifyName: o backend le este campo para o NOME do contato (o tradutor do consumidor// com fallback para pushName). Sem ele o contato fica so com o telefone.
+    // notifyName: e daqui que o consumidor tira o NOME do contato (tipicamente com
+    // fallback para pushName). Sem este campo o contato nasce so com o telefone.
+    //
+    // ★ Uma substituicao de prosa antiga ENGOLIU este comentario: o `//` do meio da
+    // linha fez o resto da frase virar codigo comentado na mesma linha. Manter em duas
+    // linhas curtas em vez de uma longa reduz a chance de repetir isso.
     notifyName: msg.pushName ?? opts.nameFallback ?? null,
     hasMedia: !!media,
-    // _data guarda o cru para depuracao; o translate le _data?.subtype em eventos
-    // de sistema (o tradutor do consumidor).
+    // _data guarda o cru para depuracao; consumidores leem _data?.subtype para
+    // classificar eventos de SISTEMA e nao mostra-los como mensagem na conversa.
     _data: { subtype: null },
   };
 
@@ -209,8 +214,9 @@ export function buildAckPayload(args: {
   fromMe?: boolean;
 }): Record<string, unknown> {
   return {
-    // O id vai SERIALIZADO. applyAck() no backend (o receptor de webhook do consumidor) faz
-    // split('_').pop() para casar tambem o id cru gravado no envio.
+    // O id vai SERIALIZADO (`<chatId>_<fromMe>_<id>`). Quem consome costuma fazer
+    // split('_').pop() para casar tambem o id CRU gravado no momento do envio — por isso
+    // o formato serializado e parte do CONTRATO, nao detalhe interno.
     id: args.msgId,
     from: toWahaChatId(args.chatId),
     fromMe: args.fromMe ?? true,
@@ -224,8 +230,8 @@ export function buildSessionStatusPayload(
   session: string,
   status: WahaSessionStatus,
 ): Record<string, unknown> {
-  // translateWahaEvent le p.status (com fallback para ev.status). O backend so
-  // compara com 'WORKING' (o receptor de webhook do consumidor) para decidir connected.
+  // O consumidor le `status` do payload (tipicamente com fallback para o do evento) e
+  // compara com 'WORKING' para decidir se o canal esta conectado.
   return { name: session, status };
 }
 

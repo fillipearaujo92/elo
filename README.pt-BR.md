@@ -15,6 +15,12 @@ seu sistema  ──HTTP──▶  ELO  ──▶  WhatsApp
              ◀─webhook──
 ```
 
+**Entra no lugar do WAHA.** O ELO fala o dialeto do WAHA de propósito: mesmos nomes de
+endpoint, mesmo formato de evento, mesmo vocabulário de sessão. Se a sua plataforma de
+chat já conversa com o WAHA, aponte para o ELO e funciona — sem driver novo, sem mudar
+código do seu lado. Qualquer sistema omnichannel que chame uma API REST e receba webhook
+pode usar.
+
 > ### ⚠️ Leia antes de usar
 >
 > O ELO usa a [Baileys](https://github.com/WhiskeySockets/Baileys), uma biblioteca **não-oficial** que fala o protocolo do WhatsApp Web. **Não é** um produto aprovado, endossado ou suportado pelo WhatsApp/Meta.

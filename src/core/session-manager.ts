@@ -7,8 +7,8 @@
 //
 //  1. LOGOUT vs QUEDA TRANSIENTE. Em logout (401/403/411) as creds viraram lixo:
 //     limpamos o auth state, zeramos me_id e vamos para SCAN_QR_CODE. Em queda
-//     transiente reconectamos com backoff PRESERVANDO me_id — e assim que o backend
-//     (a maquina de reconexao do consumidor) distingue "reconecta sozinho" de "chama um humano".
+//     transiente reconectamos com backoff PRESERVANDO me_id — e por `me_id` que quem
+//     consome distingue "reconecta sozinho" de "chama um humano com o QR".
 //
 //  2. restartRequired (515) e reconexao IMEDIATA, sem backoff e sem contar tentativa.
 //     Acontece sempre depois do primeiro QR; tratar como falha impede o pareamento.
@@ -267,7 +267,7 @@ interface LiveSession {
   name: string;
   sock: WASocket | null;
   status: WahaSessionStatus;
-  /** QR atual como data URL de PNG (o driver do backend espera base64 de imagem). */
+  /** QR atual como data URL de PNG (o driver de quem consome espera base64 de imagem). */
   qr: string | null;
   /** Quando o QR atual foi emitido (epoch ms) — o painel usa para a idade real. */
   qrAt: number | null;
@@ -753,10 +753,10 @@ export class SessionManager {
     this.log.info({ session: name }, 'sessao removida');
   }
 
-  // ── Estado observavel (o que o driver do backend le) ─────────────────────
+  // ── Estado observavel (o que o driver de quem consome le) ─────────────────────
 
   /**
-   * Shape consumido por connectionState() em o driver do consumidor:
+   * Shape que quem consome le para saber o estado do canal:
    *   status, me.id, engine.engine, e a presenca de me decide hasMe.
    */
   async describe(name: string): Promise<Record<string, unknown> | null> {
@@ -1214,8 +1214,8 @@ export class SessionManager {
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
-      // O driver do backend busca GET /api/{s}/auth/qr esperando PNG base64
-      // (o driver do consumidordocumenta que `?format=raw` quebrava o <img src>).
+      // O driver de quem consome busca GET /api/{s}/auth/qr esperando PNG base64
+      // (`?format=raw` quebrava o <img src> de quem consome — por isso o default e PNG).
       live.qr = await QRCode.toDataURL(qr, { margin: 1, width: 512 });
       // Instante de emissão: o painel calcula a idade real a partir daqui, em vez
       // de cronometrar por conta própria e dessincronizar do WhatsApp.
@@ -1605,7 +1605,7 @@ export class SessionManager {
    * reagiu. Texto vazio/ausente = a pessoa REMOVEU a reação.
    *
    * Emitimos como evento `message` com payload.reaction — o shape que o
-   * o tradutor do consumidor converte em kind='reaction' para aplicar na
+   * o tradutor de quem consome converte em kind='reaction' para aplicar na
    * mensagem alvo em vez de criar bolha nova.
    */
   private async onReaction(
@@ -1841,7 +1841,7 @@ export class SessionManager {
     // posterior nunca chegaria ao backend (consultor veria msg como enviada sem ter
     // sido). Failed e um ESTADO TERMINAL, nao um retrocesso: passa sempre, exceto
     // repeticao do proprio failed. O backend tem a guarda simetrica: delivered/read
-    // vencem failed, e failed so sobrescreve sent/NULL (o receptor de webhook do consumidor).
+    // vencem failed, e failed so sobrescreve sent/NULL (ver docs/INTEGRACAO.md).
     const isFailed = ack < 0;
     const res = await this.pool.query<{ last_ack: number }>(
       `INSERT INTO elo.sent_messages (session_name, msg_id, chat_id, last_ack)

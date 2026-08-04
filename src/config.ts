@@ -41,9 +41,13 @@ export const config = {
   port: num('PORT', 3000),
   host: optional('HOST', '0.0.0.0'),
 
-  // Autenticacao das rotas: header X-Api-Key. O driver do backend manda essa chave
-  // (o driver le waha.api_key de app_settings) e o gateway a devolve
-  // como customHeaders X-Webhook-Key nos webhooks.
+  // Autenticacao de TODAS as rotas: header X-Api-Key. Quem consome o gateway manda
+  // essa chave em cada request; onde ele a guarda e problema dele.
+  //
+  // ★ Esta chave NAO deve ser reusada como chave de webhook. Ela da poder de enviar
+  // mensagem em nome de todo numero pareado, e um webhook aponta para fora — vazar a
+  // chave mestra por ali compromete a instalacao inteira. Sessao criada sem chave de
+  // webhook propria recebe uma gerada (randomBytes 32), ver core/session-manager.ts.
   apiKey: required('API_KEY'),
 
   databaseUrl: required('DATABASE_URL'),
@@ -53,7 +57,7 @@ export const config = {
   mediaDir: optional('MEDIA_DIR', '/data/media'),
 
   // URL publica do gateway. Usada para montar a URL de midia nos webhooks.
-  // O driver do backend reescreve localhost:3000 -> baseUrl publico (o driver do consumidor),
+  // O driver de quem consome reescreve localhost:3000 -> baseUrl publico (ver docs/INTEGRACAO.md),
   // entao emitir localhost funcionaria, mas emitir a URL correta e mais limpo.
   publicUrl: optional('PUBLIC_URL', ''),
 
@@ -83,7 +87,7 @@ export const config = {
   sentMessagesRetentionDays: num('SENT_MESSAGES_RETENTION_DAYS', 7),
 
   // Throttle de session.status. O WAHA real emite um evento a cada refresh de QR
-  // (~20s) e isso causava tempestade no backend (o receptor de webhook do consumidordocumenta).
+  // (~20s) e isso causava tempestade em quem recebe os webhooks.
   // Aqui suprimimos repeticoes do MESMO status dentro da janela.
   sessionStatusThrottleMs: num('SESSION_STATUS_THROTTLE_MS', 60_000),
 
