@@ -69,6 +69,40 @@ export interface SessionConfig {
     /** Listas de transmissao (@broadcast, exceto status@broadcast). */
     broadcast?: boolean;
   };
+  /**
+   * Chamadas de voz/video recebidas.
+   *
+   * ── O que o protocolo permite, e o que NAO permite ───────────────────────
+   * O WhatsApp negocia a MIDIA da chamada por WebRTC, ponta a ponta, entre os dois
+   * aparelhos. A biblioteca implementa a SINALIZACAO (o canal de mensagens), nao a
+   * pilha de midia — verificado: `acceptCall`, `offerCall`, `endCall` e afins NAO
+   * existem. Logo:
+   *
+   *   da para: saber que ligaram, acompanhar o ciclo, RECUSAR, gerar link de chamada
+   *   nao da : atender, originar ou transportar audio
+   *
+   * Um gateway que "atendesse" nao teria por onde passar a voz. Documentado aqui
+   * porque e a primeira pergunta de quem integra, e a resposta e do protocolo.
+   */
+  calls?: {
+    /**
+     * Recusa automaticamente toda chamada recebida.
+     *
+     * O caso real: numero de atendimento que so trabalha por texto. Sem isto o
+     * cliente liga, chama sem parar e desiste sem saber se o canal existe. Com
+     * isto a chamada cai na hora e ele recebe (opcionalmente) uma mensagem
+     * dizendo o que fazer.
+     */
+    rejectAll?: boolean;
+    /**
+     * Texto enviado ao contato logo apos a recusa automatica.
+     *
+     * Vazio/ausente = recusa em silencio. So e enviado quando `rejectAll` esta
+     * ligado: mandar explicacao para uma chamada que um humano recusou seria
+     * mentir sobre quem decidiu.
+     */
+    rejectMessage?: string;
+  };
   [k: string]: unknown;
 }
 
@@ -348,6 +382,19 @@ export class SessionManager {
    */
   private readonly decryptFalhou = new Set<string>();
 
+  /**
+   * Pares (chamada, status) ja emitidos, para nao repetir evento.
+   *
+   * O WhatsApp reenvia atualizacao da MESMA chamada — o `offer` costuma chegar mais
+   * de uma vez, e apos reconexao vem o lote represado (`offline: true`). Sem este
+   * anel, quem consome gravaria varias entradas para uma ligacao so, e o operador
+   * leria como varias tentativas do cliente.
+   *
+   * Em memoria e com teto (chamada e evento raro perto de mensagem): perder o estado
+   * num restart no maximo repete um evento, o que e melhor que crescer sem limite.
+   */
+  private readonly callsVistas = new Set<string>();
+
   private readonly presences = new Map<string, { state: string; lastSeen: number | null; at: number }>();
   private waVersion: [number, number, number] | undefined;
   /**
@@ -515,6 +562,10 @@ export class SessionManager {
       ignoreStatus?: boolean;
       ignoreChannels?: boolean;
       ignoreBroadcast?: boolean;
+      /** Recusa automatica de chamada recebida (ver SessionConfig.calls). */
+      rejectCalls?: boolean;
+      /** Mensagem enviada apos a recusa automatica; vazio = recusa em silencio. */
+      rejectCallsMessage?: string | null;
       webhookUrl?: string | null;
       webhookEvents?: string[];
       webhookKey?: string;
@@ -539,6 +590,20 @@ export class SessionManager {
       if (patch[from] !== undefined) {
         cfg.ignore = { ...(cfg.ignore ?? {}), [to]: !!patch[from] };
       }
+    }
+
+    // ── Chamadas ──────────────────────────────────────────────────────────
+    // Merge, como os filtros acima: mexer na mensagem nao pode desligar a recusa.
+    if (patch.rejectCalls !== undefined) {
+      cfg.calls = { ...(cfg.calls ?? {}), rejectAll: !!patch.rejectCalls };
+    }
+    if (patch.rejectCallsMessage !== undefined) {
+      const texto = patch.rejectCallsMessage?.trim();
+      cfg.calls = { ...(cfg.calls ?? {}) };
+      // null/vazio APAGA a mensagem (volta a recusar em silencio) em vez de gravar
+      // string vazia — senao o `if (texto)` do onCall passaria a mandar nada.
+      if (texto) cfg.calls.rejectMessage = texto;
+      else delete cfg.calls.rejectMessage;
     }
 
     // ── Webhook ───────────────────────────────────────────────────────────
@@ -1160,6 +1225,25 @@ export class SessionManager {
       }
     });
 
+    // ── Chamadas de voz/video ────────────────────────────────────────────
+    //
+    // ★ Antes disto, uma chamada recebida sumia: o gateway nao emitia nada, e o
+    // sistema consumidor nao tinha como registrar "o cliente ligou as 14h32 e
+    // ninguem atendeu". Para um chat omnichannel isso e um buraco no historico do
+    // atendimento — a interacao aconteceu e nao existe em lugar nenhum.
+    //
+    // O evento cobre o CICLO todo (offer -> ringing -> accept/reject/timeout), e nao
+    // so o inicio: e a diferenca entre "ligaram" e "ligaram, ninguem atendeu, o
+    // cliente desligou em 12s".
+    sock.ev.on('call', (chamadas) => {
+      if (!atual()) return;
+      for (const c of chamadas ?? []) {
+        this.onCall(live, c as never).catch((err) =>
+          childLog.error({ err: (err as Error).message }, 'erro ao processar chamada'),
+        );
+      }
+    });
+
     sock.ev.on('messages.reaction', (reactions) => {
       if (!atual()) return;
       for (const r of reactions) {
@@ -1682,6 +1766,138 @@ export class SessionManager {
           messageId: targetId,
           fromMe: !!ev.key?.fromMe, // fromMe do ALVO: a msg reagida é nossa?
         },
+      },
+    });
+  }
+
+  /**
+   * Chamada de voz/video recebida.
+   *
+   * ── O que este metodo faz, e o que NAO pode fazer ─────────────────────────
+   * Emite o evento para quem consome e, se a sessao pedir, RECUSA. Atender e
+   * originar nao existem no protocolo disponivel: a midia da chamada e WebRTC
+   * ponta a ponta entre os aparelhos, e a biblioteca implementa a sinalizacao, nao
+   * a pilha de midia (`acceptCall`/`offerCall`/`endCall` nao existem — verificado).
+   *
+   * ── Por que emitir TODOS os status, e nao so o `offer` ───────────────────
+   * O ciclo de uma chamada e `offer -> ringing -> accept|reject|timeout|terminate`.
+   * Emitir so o inicio diria "ligaram"; emitir o ciclo diz "ligaram, ninguem
+   * atendeu, o cliente desligou em 12s" — que e o que serve para atendimento.
+   *
+   * ── Idempotencia ─────────────────────────────────────────────────────────
+   * O WhatsApp reenvia atualizacao da MESMA chamada (o `offer` costuma vir mais de
+   * uma vez, e `offline: true` marca o que chegou represado apos reconexao).
+   * Repetir o mesmo (id, status) viraria varias entradas no historico de quem
+   * consome, e o operador leria como varias ligacoes. O anel abaixo corta isso.
+   */
+  private async onCall(
+    live: LiveSession,
+    ev: {
+      id?: string;
+      from?: string;
+      chatId?: string;
+      callerPn?: string;
+      isGroup?: boolean;
+      groupJid?: string;
+      isVideo?: boolean;
+      status?: string;
+      offline?: boolean;
+      date?: Date;
+    },
+  ): Promise<void> {
+    const callId = ev?.id;
+    const from = ev?.from ?? ev?.chatId;
+    if (!callId || !from) return;
+
+    // ── Corta repeticao do mesmo (chamada, status) ────────────────────────
+    // Anel simples com teto: chamada e evento raro comparado a mensagem, e um Map
+    // sem limite aqui seria vazamento lento num gateway que roda por meses.
+    const chave = `${live.name}|${callId}|${ev.status ?? '?'}`;
+    if (this.callsVistas.has(chave)) return;
+    this.callsVistas.add(chave);
+    if (this.callsVistas.size > 500) {
+      const primeira = this.callsVistas.values().next().value;
+      if (primeira) this.callsVistas.delete(primeira);
+    }
+
+    const status = String(ev.status ?? 'offer');
+    // `callerPn` traz o TELEFONE quando o `from` e um LID (id oculto). Sem esta
+    // preferencia, a chamada chegaria identificada por um id que ninguem reconhece
+    // — o mesmo problema que o mapa de LID resolve para mensagem.
+    const numero = ev.callerPn ?? from;
+    const tipo = ev.isVideo ? 'video' : 'voice';
+
+    inc('call_total', live.name);
+
+    // ── Recusa automatica ────────────────────────────────────────────────
+    //
+    // So no `offer`: recusar em `ringing`/`accept` seria tarde (a chamada ja
+    // avancou) e o WhatsApp responderia erro por chamada em estado invalido.
+    let recusada = false;
+    if (live.config?.calls?.rejectAll && status === 'offer' && live.sock) {
+      try {
+        await live.sock.rejectCall(callId, from);
+        recusada = true;
+        inc('call_rejected_total', live.name);
+        this.log.info(
+          { session: live.name, callId, de: numero, tipo },
+          'chamada recusada automaticamente',
+        );
+
+        // Mensagem de cortesia: o motivo de existir a recusa automatica e o cliente
+        // NAO ficar sem resposta. Recusar em silencio resolveria o incomodo do
+        // operador e deixaria o cliente exatamente onde estava.
+        const texto = live.config.calls.rejectMessage?.trim();
+        if (texto) {
+          await live.sock
+            .sendMessage(from, { text: texto })
+            .catch((err: Error) =>
+              this.log.warn(
+                { session: live.name, callId, err: err.message },
+                'recusei a chamada mas nao consegui enviar a mensagem de aviso',
+              ),
+            );
+        }
+      } catch (err) {
+        // Falhar a recusa NAO pode impedir o evento de chegar a quem consome: o
+        // registro da ligacao vale mesmo quando a recusa nao foi aceita.
+        this.log.warn(
+          { session: live.name, callId, err: (err as Error).message },
+          'falha ao recusar a chamada automaticamente',
+        );
+      }
+    }
+
+    events.emit(
+      'call', live.name,
+      `Chamada de ${tipo === 'video' ? 'video' : 'voz'} — ${status}${recusada ? ' (recusada)' : ''}`,
+      { de: numero, callId, tipo, status },
+      status === 'offer' ? 'info' : undefined,
+    );
+
+    await this.webhooks.emit(live.config?.webhooks, {
+      event: 'call' as never,
+      session: live.name,
+      payload: {
+        id: callId,
+        from: toWahaChatId(numero),
+        // `fromLid` explicito quando o id veio oculto: quem consome pode querer
+        // resolver depois, e esconder isso faria o numero parecer inventado.
+        fromLid: from.endsWith('@lid') ? from : null,
+        isGroup: !!ev.isGroup,
+        groupId: ev.groupJid ? toWahaChatId(ev.groupJid) : null,
+        // 'voice' | 'video' em vez de um booleano: o consumidor grava um rotulo,
+        // e `isVideo: false` exige que ele saiba que o oposto e voz.
+        type: tipo,
+        status,
+        // O gateway recusou? Distingue "ninguem atendeu" de "recusamos por regra",
+        // que sao coisas diferentes no relatorio de atendimento.
+        rejectedByGateway: recusada,
+        // `offline: true` = evento represado que chegou na reconexao, nao uma
+        // ligacao acontecendo agora. Sem isto, um restart geraria "estao ligando"
+        // para chamadas de horas atras.
+        offline: !!ev.offline,
+        timestamp: ev.date instanceof Date ? Math.floor(ev.date.getTime() / 1000) : null,
       },
     });
   }

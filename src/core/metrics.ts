@@ -71,7 +71,18 @@ export type CounterName =
    * Resolucoes de midia que TIVERAM DE ESPERAR vaga no semaforo. Contador GLOBAL.
    * Valor subindo = o teto de concorrencia esta apertado para o volume real.
    */
-  | 'media_queued_total';
+  | 'media_queued_total'
+  /**
+   * Chamadas de voz/video recebidas (todos os status do ciclo).
+   *
+   * Responde uma pergunta que antes nao tinha resposta: "quantos clientes estao
+   * tentando LIGAR para um canal que so atende por texto?". Se o numero for alto, a
+   * expectativa do cliente diverge do que o canal oferece — e isso e decisao de
+   * operacao, nao de tecnologia.
+   */
+  | 'call_total'
+  /** Chamadas recusadas automaticamente pelo gateway (`calls.rejectAll`). */
+  | 'call_rejected_total';
 
 const HELP: Record<CounterName, string> = {
   inbound_total: 'Mensagens recebidas e repassadas',
@@ -94,6 +105,8 @@ const HELP: Record<CounterName, string> = {
   sent_messages_purged_total: 'Linhas de sent_messages apagadas pela limpeza (retencao)',
   sse_rejected_total: 'Streams de diagnostico rejeitados por teto de conexoes simultaneas',
   media_queued_total: 'Resolucoes de midia que esperaram vaga (teto de concorrencia)',
+  call_total: 'Chamadas de voz/video recebidas (o gateway nao atende, apenas registra)',
+  call_rejected_total: 'Chamadas recusadas automaticamente pelo gateway',
 };
 
 /** contador -> sessão -> valor. */

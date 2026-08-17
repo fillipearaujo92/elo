@@ -113,6 +113,8 @@ export function registerSessionRoutes(app: FastifyInstance, { sessions }: Deps):
       ignoreStatus?: boolean;
       ignoreChannels?: boolean;
       ignoreBroadcast?: boolean;
+      rejectCalls?: boolean;
+      rejectCallsMessage?: string | null;
       webhookUrl?: string | null;
       webhookEvents?: string[];
       webhookKey?: string;
@@ -160,6 +162,12 @@ export function registerSessionRoutes(app: FastifyInstance, { sessions }: Deps):
     }
 
     // Um header sem nome viraria entrada morta no objeto de headers.
+    // A mensagem de recusa e ENVIADA ao contato: um texto gigante viraria parede no
+    // WhatsApp dele. 500 cobre com folga qualquer redacao util para um aviso.
+    if (b.rejectCallsMessage && b.rejectCallsMessage.length > 500) {
+      return reply.code(400).send({ message: 'a mensagem de recusa passa de 500 caracteres' });
+    }
+
     if (b.webhookHeaders) {
       if (!Array.isArray(b.webhookHeaders)) {
         return reply.code(400).send({ message: 'cabeçalhos deve ser uma lista' });

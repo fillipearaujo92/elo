@@ -158,6 +158,16 @@ export function buildOpenApi(version: string): Record<string, unknown> {
           'Most write operations require the connected number to be a group ADMIN — WhatsApp ' +
           'rejects them otherwise, and the gateway returns 403 with `code: group_not_admin`.',
       },
+      {
+        name: 'Calls',
+        description:
+          'Incoming voice/video calls: be notified, reject, and generate a call link.\n\n' +
+          '**What the protocol does NOT allow:** answering, placing or carrying a call. ' +
+          'WhatsApp negotiates call MEDIA end-to-end over WebRTC between the two devices; ' +
+          'the library ELO builds on implements the signalling channel, not the media stack. ' +
+          'A gateway that "answered" would have nowhere for the audio to flow. If you need ' +
+          'actual voice, that is telephony (SIP/PSTN) — a different path.',
+      },
       { name: 'Operations', description: 'Health, metrics, backup, live diagnostics.' },
     ],
     components: {
@@ -399,6 +409,22 @@ export function buildOpenApi(version: string): Record<string, unknown> {
                     ignoreStatus: { type: 'boolean' },
                     ignoreChannels: { type: 'boolean' },
                     ignoreBroadcast: { type: 'boolean' },
+                    rejectCalls: {
+                      type: 'boolean',
+                      description:
+                        'Automatically reject every incoming call. For a text-only support ' +
+                        'number this is what stops a customer ringing into the void: the ' +
+                        'call drops immediately instead of ringing with nobody there.',
+                    },
+                    rejectCallsMessage: {
+                      type: ['string', 'null'],
+                      maxLength: 500,
+                      description:
+                        'Sent to the caller right after an automatic rejection — this is the ' +
+                        'point of rejecting automatically: the customer learns what to do ' +
+                        'instead of being left guessing. Empty or null rejects silently. ' +
+                        'Only used while `rejectCalls` is on.',
+                    },
                     webhookUrl: {
                       type: ['string', 'null'],
                       description: 'Empty or null removes forwarding.',
@@ -1425,6 +1451,94 @@ export function buildOpenApi(version: string): Record<string, unknown> {
             200: { description: 'Result per requester.' },
             400: erro('Invalid action.'),
             403: erro('Admin required (`code: group_not_admin`).'),
+            422: naoConectada,
+          },
+        },
+      },
+
+      // ── Chamadas ─────────────────────────────────────────────────────────
+      '/api/calls/reject': {
+        post: {
+          tags: ['Calls'],
+          summary: 'Reject an incoming call',
+          description:
+            '`callId` and `from` both come from the `call` webhook. The protocol needs the ' +
+            'pair: the id identifies the call, `from` says who to answer — WhatsApp will not ' +
+            'derive one from the other.\n\n' +
+            'A 404 here is usually **not** a bug: calls are short, and between your system ' +
+            'receiving the webhook and deciding to reject, the caller may have already hung ' +
+            'up. The body says so (`code: call_not_found`).\n\n' +
+            'To reject every call automatically, set `rejectCalls` on the session instead ' +
+            '(PATCH /api/sessions/{session}/settings) — it fires the moment the call arrives, ' +
+            'with no round trip.',
+          operationId: 'rejectCall',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['session', 'callId', 'from'],
+                  properties: {
+                    session: sessionName,
+                    callId: { type: 'string', description: 'From the `call` webhook.' },
+                    from: { type: 'string', description: 'Caller, from the `call` webhook.' },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: 'Rejected.' },
+            400: erro('Missing callId or from.'),
+            404: erro('Call no longer exists — it most likely already ended.'),
+            422: naoConectada,
+          },
+        },
+      },
+
+      '/api/calls/link': {
+        post: {
+          tags: ['Calls'],
+          summary: 'Create a call link',
+          description:
+            'The closest thing to "placing a call" the protocol allows: the gateway does not ' +
+            'dial, it creates a link the contact OPENS in their own WhatsApp. Send it in a ' +
+            'message — useful for scheduling ("tap here at the agreed time") without exposing ' +
+            'anyone\'s phone number.',
+          operationId: 'createCallLink',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['session'],
+                  properties: {
+                    session: sessionName,
+                    type: { type: 'string', enum: ['audio', 'video'], default: 'video' },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: {
+              description: 'Token and a ready-to-send URL.',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      type: { type: 'string' },
+                      token: { type: 'string' },
+                      url: { type: 'string' },
+                    },
+                  },
+                },
+              },
+            },
+            400: erro('type must be audio or video.'),
             422: naoConectada,
           },
         },

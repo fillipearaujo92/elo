@@ -18,6 +18,7 @@ import { MediaStore } from '../dist/core/media.js';
 import { SessionManager } from '../dist/core/session-manager.js';
 import { registerContactRoutes } from '../dist/routes/contacts.js';
 import { registerGroupRoutes } from '../dist/routes/groups.js';
+import { registerCallRoutes } from '../dist/routes/calls.js';
 import { registerPresenceRoutes } from '../dist/routes/presence.js';
 import { registerSendRoutes } from '../dist/routes/send.js';
 import { registerSessionRoutes } from '../dist/routes/sessions.js';
@@ -71,6 +72,7 @@ before(async () => {
   registerSendRoutes(app, { sessions: manager });
   registerContactRoutes(app, { sessions: manager });
   registerGroupRoutes(app, { sessions: manager });
+  registerCallRoutes(app, { sessions: manager });
   registerPresenceRoutes(app, { sessions: manager });
   await app.ready();
 });

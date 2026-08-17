@@ -23,6 +23,7 @@ export type EventKind =
   | 'webhook'      // entrega de webhook (sucesso/falha)
   | 'error'        // falha relevante (decrypt, envio, etc)
   | 'media'        // download de mídia
+  | 'call'         // chamada de voz/vídeo recebida (o gateway não atende — ver onCall)
   | 'janitor';     // limpeza periódica (retenção de sent_messages)
 
 export interface GatewayEvent {

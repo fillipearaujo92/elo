@@ -14,6 +14,7 @@ import { WebhookEmitter } from './core/webhook.js';
 import { migrate, pool } from './db/pool.js';
 import { registerContactRoutes } from './routes/contacts.js';
 import { registerGroupRoutes } from './routes/groups.js';
+import { registerCallRoutes } from './routes/calls.js';
 import { registerSendRoutes } from './routes/send.js';
 import { registerPresenceRoutes } from './routes/presence.js';
 import { registerSessionRoutes } from './routes/sessions.js';
@@ -403,6 +404,7 @@ registerSessionRoutes(app, { sessions });
 registerSendRoutes(app, { sessions });
 registerContactRoutes(app, { sessions });
 registerGroupRoutes(app, { sessions });
+registerCallRoutes(app, { sessions });
 registerPresenceRoutes(app, { sessions });
 
 // ── Documentação da API ────────────────────────────────────────────────────
