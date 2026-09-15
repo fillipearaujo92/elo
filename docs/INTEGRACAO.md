@@ -220,6 +220,13 @@ curl -X POST localhost:3000/api/sendImage \
   -d '{"session":"atendimento","chatId":"5511999999999",
        "file":{"url":"https://exemplo.com/foto.jpg"},"caption":"a planta"}'
 
+# localização (pino nativo, com mapa na bolha)
+curl -X POST localhost:3000/api/sendLocation \
+  -H "X-Api-Key: SUA_CHAVE" -H 'Content-Type: application/json' \
+  -d '{"session":"atendimento","chatId":"5511999999999",
+       "latitude":-23.5613,"longitude":-46.6565,
+       "title":"Loja Centro","address":"Av. Paulista, 1000"}'
+
 # vários arquivos numa chamada, cada um com sua legenda
 curl -X POST localhost:3000/api/sendMedia \
   -H "X-Api-Key: SUA_CHAVE" -H 'Content-Type: application/json' \
@@ -236,6 +243,15 @@ e link-local, porque essa URL vem de quem chama a API e alcançaria serviços in
 as credenciais da instância. Se a sua origem de mídia é interna de propósito, ligue
 `ALLOW_PRIVATE_FETCH=1`. Alternativa sem abrir nada: mande o arquivo em `file.data`
 (base64).
+
+### Localização
+
+`latitude` e `longitude` são **obrigatórias** e precisam ser números finitos. Campo
+ausente, `null` ou string vazia devolve **400** em vez de virar `0` — `0,0` é um ponto
+real no Golfo da Guiné, e um bug no seu lado que perdesse o campo mandaria o contato
+para o meio do Atlântico com `200` e id de sucesso. `0` explícito é aceito.
+
+`title` aparece em negrito na bolha e `address` na linha de baixo; ambos são opcionais.
 
 ### Áudio como voice note
 

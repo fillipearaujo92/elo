@@ -184,7 +184,7 @@ curl -X POST http://localhost:3000/api/sendImage \
 ```
 
 Send endpoints: `sendText`, `sendImage`, `sendVideo`, `sendVoice`, `sendFile`,
-`sendSticker`, `sendMedia`, `sendReaction`.
+`sendSticker`, `sendMedia`, `sendLocation`, `sendReaction`.
 
 For **voice notes** (showing up as a recording, not a file attachment), send
 `audio/ogg; codecs=opus` through `sendVoice` — it is the only format WhatsApp
@@ -418,6 +418,7 @@ panel also has a live diagnostics tab.
 | `GET` | `/api/{s}/auth/qr` | QR code (PNG) |
 | `POST` | `/api/sendText` … | send one item |
 | `POST` | `/api/sendMedia` | several files / album |
+| `POST` | `/api/sendLocation` | native location pin |
 | `POST` | `/api/editMessage` | edit the text |
 | `POST` | `/api/deleteMessage` | delete for everyone |
 | `POST` | `/api/forwardMessage` | forward to another chat |

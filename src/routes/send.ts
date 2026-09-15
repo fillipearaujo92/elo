@@ -204,6 +204,23 @@ function buildQuoted(replyTo: string | undefined, chatJid: string): object | und
 }
 
 export function registerSendRoutes(app: FastifyInstance, { sessions }: Deps): void {
+  /**
+   * Converte o valor recebido em coordenada, ou `undefined` se nao for uma.
+   *
+   * Aceita numero e string (JSON de formulario manda string), mas rejeita
+   * `null`, `''` e qualquer coisa que nao vire numero finito — ver o comentario
+   * em /api/sendLocation sobre por que 0 por omissao seria um bug grave.
+   */
+  function coordenada(valor: number | string | undefined): number | undefined {
+    if (typeof valor === 'number') return Number.isFinite(valor) ? valor : undefined;
+    if (typeof valor !== 'string') return undefined;
+    const texto = valor.trim();
+    if (!texto) return undefined;
+    // Virgula decimal: "-3,891224" e o formato que o usuario brasileiro digita.
+    const numero = Number(texto.replace(',', '.'));
+    return Number.isFinite(numero) ? numero : undefined;
+  }
+
   /** Resolve os campos comuns e valida antes de tocar no socket. */
   function prepare(body: SendBody | undefined): { session: string; jid: string } {
     const session = body?.session?.trim();
@@ -634,6 +651,71 @@ export function registerSendRoutes(app: FastifyInstance, { sessions }: Deps): vo
     const text = typeof req.body?.text === 'string' ? req.body.text : '';
     if (!text.trim()) throw new Boom('text e obrigatorio', { statusCode: 400 });
     return send(session, jid, { text }, req.body?.reply_to);
+  });
+
+  // POST /api/sendLocation — pino nativo do WhatsApp (bolha com mapa).
+  //
+  // O Baileys entrega isso direto; sem esta rota o consumidor so podia mandar
+  // um link do Maps dentro do texto, que chega como link cru e nao abre o mapa
+  // embutido na bolha.
+  app.post<{
+    Body: {
+      session?: string;
+      chatId?: string;
+      latitude?: number | string;
+      longitude?: number | string;
+      /** Nome do lugar, em negrito na bolha ("Loja Centro"). */
+      title?: string;
+      /** Endereco por extenso, na linha de baixo. */
+      address?: string;
+      reply_to?: string;
+    };
+  }>('/api/sendLocation', async (req) => {
+    const { session, jid } = prepare(req.body);
+
+    // ★ Coordenada AUSENTE nao pode virar zero.
+    //
+    // `Number(undefined)` e NaN, mas `Number(null)` e `Number('')` sao 0 — e 0,0
+    // e um ponto valido no Golfo da Guine. Um consumidor que perdesse o campo
+    // mandaria o contato para o meio do Atlantico com 200 e id de sucesso,
+    // exatamente o tipo de falha silenciosa que o /sendText ja tomou com texto
+    // vazio. Por isso exigimos numero finito, e nao apenas "conversivel".
+    const latitude = coordenada(req.body?.latitude);
+    const longitude = coordenada(req.body?.longitude);
+    if (latitude === undefined) {
+      throw new Boom('latitude e obrigatoria (numero entre -90 e 90)', {
+        statusCode: 400,
+      });
+    }
+    if (longitude === undefined) {
+      throw new Boom('longitude e obrigatoria (numero entre -180 e 180)', {
+        statusCode: 400,
+      });
+    }
+    if (Math.abs(latitude) > 90) {
+      throw new Boom('latitude fora da faixa (-90 a 90)', { statusCode: 400 });
+    }
+    if (Math.abs(longitude) > 180) {
+      throw new Boom('longitude fora da faixa (-180 a 180)', { statusCode: 400 });
+    }
+
+    const title = typeof req.body?.title === 'string' ? req.body.title.trim() : '';
+    const address =
+      typeof req.body?.address === 'string' ? req.body.address.trim() : '';
+
+    return send(
+      session,
+      jid,
+      {
+        location: {
+          degreesLatitude: latitude,
+          degreesLongitude: longitude,
+          ...(title ? { name: title } : {}),
+          ...(address ? { address } : {}),
+        },
+      },
+      req.body?.reply_to,
+    );
   });
 
   // POST /api/sendImage

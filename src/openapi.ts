@@ -564,6 +564,38 @@ export function buildOpenApi(version: string): Record<string, unknown> {
           },
         },
       },
+      '/api/sendLocation': {
+        post: {
+          tags: ['Send'],
+          summary: 'Send a location pin',
+          operationId: 'sendLocation',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['session', 'chatId', 'latitude', 'longitude'],
+                  properties: {
+                    session: sessionName,
+                    chatId,
+                    latitude: { type: 'number', minimum: -90, maximum: 90 },
+                    longitude: { type: 'number', minimum: -180, maximum: 180 },
+                    title: { type: 'string', description: 'Place name, bold in the bubble.' },
+                    address: { type: 'string', description: 'Full address, second line.' },
+                    reply_to: { type: 'string' },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: enviado,
+            400: erro('Missing or out-of-range coordinates.'),
+            422: naoConectada,
+          },
+        },
+      },
       '/api/sendImage': envioMidia('sendImage', 'Send an image'),
       '/api/sendVideo': envioMidia('sendVideo', 'Send a video'),
       '/api/sendFile': envioMidia('sendFile', 'Send a document or attachment'),
