@@ -137,9 +137,27 @@ export class WebhookEmitter {
           return;
         }
 
-        // 4xx (exceto 429) e erro de contrato/auth: retentar nao resolve e so
-        // enfileira lixo. 401 aqui quase sempre significa customHeaders errado.
-        if (res.status >= 400 && res.status < 500 && res.status !== 429) {
+        /**
+         * 4xx (exceto 429 e 404) e erro de contrato/auth: retentar nao resolve
+         * e so enfileira lixo. 401 aqui quase sempre significa customHeaders
+         * errado.
+         *
+         * ★ 404 e a excecao: nao e "a requisicao esta errada", e "o endpoint
+         *   nao existe AGORA". O caso real e o consumidor reiniciando — durante
+         *   o rebuild o servidor responde 404 por alguns segundos, e sem retry
+         *   a mensagem do cliente se perde em silencio. Medido em producao: uma
+         *   mensagem sumiu exatamente durante um deploy do backend.
+         *
+         *   Se a rota realmente nao existir, o retry esgota e o log registra —
+         *   o custo e algumas tentativas; o custo do contrario e perder
+         *   conversa de cliente.
+         */
+        if (
+          res.status >= 400 &&
+          res.status < 500 &&
+          res.status !== 429 &&
+          res.status !== 404
+        ) {
           this.log.error(
             { event: event.event, session: event.session, status: res.status, url: urlSegura(w.url) },
             'webhook rejeitado com erro de cliente; nao vou retentar',

@@ -218,6 +218,18 @@ describe('WebhookEmitter', () => {
     assert.equal(calls.length, 1, '401 nao melhora com retry; nao enfileirar lixo');
   });
 
+  it('★ retenta em 404 (consumidor reiniciando)', async () => {
+    // Caso real: durante o rebuild do backend o servidor responde 404 por
+    // alguns segundos. Sem retry, a mensagem do cliente se perde em silencio
+    // — aconteceu em producao.
+    const { emitter, calls } = makeEmitter([{ ok: false, status: 404 }, { ok: true }]);
+    await emitter.emit(
+      [{ url: 'http://app/w', retries: { attempts: 3, delaySeconds: 0 } }],
+      event,
+    );
+    assert.equal(calls.length, 2, '404 e transitorio durante deploy; precisa retentar');
+  });
+
   it('retenta em 429 (rate limit e transitorio)', async () => {
     const { emitter, calls } = makeEmitter([{ ok: false, status: 429 }, { ok: true }]);
     await emitter.emit(
