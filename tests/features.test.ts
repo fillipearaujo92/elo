@@ -62,6 +62,67 @@ describe('origem do envio (equivalente ao source da Evolution)', () => {
   });
 });
 
+describe('anuncio (Click-to-WhatsApp)', () => {
+  // Quem clica num anuncio do Google ou da Meta e cai no WhatsApp chega com
+  // este bloco. Sem repassa-lo, o lead e indistinguivel de quem escreveu
+  // espontaneamente — e nao ha como saber qual campanha pagou por ele.
+  const doAnuncio = msg({
+    message: {
+      extendedTextMessage: {
+        text: 'Ola, vi o anuncio',
+        contextInfo: {
+          externalAdReply: {
+            title: 'Consultoria gratuita',
+            body: 'Fale com um especialista',
+            sourceUrl: 'https://acme.com.br/promo?utm_source=google',
+            sourceId: '120210000000000000',
+            sourceType: 'ad',
+          },
+          conversionSource: { conversionSource: 'ARAxbC_ctwa_clid_exemplo' },
+        },
+      },
+    },
+  });
+
+  it('expoe o titulo do anuncio', () => {
+    const p = buildMessagePayload(doAnuncio) as Record<string, unknown>;
+    const ad = p.adReply as { title?: string };
+    assert.equal(ad.title, 'Consultoria gratuita');
+  });
+
+  it('expoe a url de origem, com os parametros da campanha', () => {
+    const p = buildMessagePayload(doAnuncio) as Record<string, unknown>;
+    const ad = p.adReply as { sourceUrl?: string };
+    assert.equal(ad.sourceUrl, 'https://acme.com.br/promo?utm_source=google');
+  });
+
+  it('expoe o ctwaClid, que identifica o clique na Meta', () => {
+    const p = buildMessagePayload(doAnuncio) as Record<string, unknown>;
+    const ad = p.adReply as { ctwaClid?: string };
+    assert.equal(ad.ctwaClid, 'ARAxbC_ctwa_clid_exemplo');
+  });
+
+  it('mensagem comum NAO ganha o campo', () => {
+    // As mensagens seguintes da mesma conversa vem sem o bloco, e e o
+    // comportamento certo: o credito e do clique, nao de cada frase depois.
+    const p = buildMessagePayload(msg({})) as Record<string, unknown>;
+    assert.equal(p.adReply, undefined);
+  });
+
+  it('bloco vazio nao vira campo', () => {
+    const vazio = msg({
+      message: {
+        extendedTextMessage: {
+          text: 'oi',
+          contextInfo: { externalAdReply: {} },
+        },
+      },
+    });
+    const p = buildMessagePayload(vazio) as Record<string, unknown>;
+    assert.equal(p.adReply, undefined);
+  });
+});
+
 describe('reply (mensagem citada)', () => {
   const comCitacao = msg({
     message: {

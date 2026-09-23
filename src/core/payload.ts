@@ -140,6 +140,15 @@ export function buildMessagePayload(
     payload._data = { ...(payload._data as object), quotedMsg: quoted.body };
   }
 
+  // ── ANUNCIO (Click-to-WhatsApp) ───────────────────────────────────────────
+  // Presente so na mensagem que inaugura a conversa vinda de um anuncio do
+  // Google ou da Meta. E o unico momento em que da para saber qual campanha
+  // trouxe o lead: as mensagens seguintes chegam sem o bloco.
+  const adReply = extractAdReply(msg);
+  if (adReply) {
+    payload.adReply = adReply;
+  }
+
   // ── REACTION ──────────────────────────────────────────────────────────────
   // Uma reacao chega como mensagem com reactionMessage. NAO e conversa: quem
   // consome deve aplicar a reacao na mensagem alvo, nao criar bolha nova.
@@ -188,6 +197,75 @@ function extractQuoted(msg: WAMessage): {
     participant: ctx.participant ? toWahaChatId(ctx.participant) : null,
     body: body ?? null,
   };
+}
+
+/**
+ * O anuncio que trouxe a pessoa, quando ela chegou por Click-to-WhatsApp.
+ *
+ * ★ Por que isto importa.
+ *
+ *   Quem clica num anuncio do Google ou da Meta e cai no WhatsApp chega com
+ *   `externalAdReply` preenchido: titulo do anuncio, link de origem e, nas
+ *   campanhas da Meta, o `ctwaClid` — o carimbo que identifica o clique. Sem
+ *   repassar isso, o consumidor recebe um lead identico a quem escreveu
+ *   espontaneamente, e nao ha como dizer qual anuncio pagou por ele.
+ *
+ * ★ So no PRIMEIRO contato.
+ *
+ *   O WhatsApp manda este bloco apenas na mensagem que inaugura a conversa
+ *   a partir do anuncio. As seguintes vem limpas — e e o comportamento certo:
+ *   o credito e do clique, nao de cada frase depois dele.
+ */
+function extractAdReply(msg: WAMessage): {
+  title?: string;
+  body?: string;
+  sourceUrl?: string;
+  sourceId?: string;
+  sourceType?: string;
+  ctwaClid?: string;
+} | null {
+  const c = msg.message;
+  if (!c) return null;
+
+  // Mesma busca do extractQuoted: contextInfo mora dentro do tipo especifico.
+  const ctx =
+    c.extendedTextMessage?.contextInfo ??
+    c.imageMessage?.contextInfo ??
+    c.videoMessage?.contextInfo ??
+    c.audioMessage?.contextInfo ??
+    c.documentMessage?.contextInfo ??
+    c.stickerMessage?.contextInfo ??
+    null;
+
+  const ad = ctx?.externalAdReply;
+  if (!ad) return null;
+
+  // `conversionSource` carrega o ctwaClid em bytes nas versoes recentes.
+  const conv = (ctx as { conversionSource?: unknown }).conversionSource;
+  let ctwaClid: string | undefined;
+  if (typeof conv === 'string') ctwaClid = conv;
+  else if (conv && typeof conv === 'object') {
+    const bruto = (conv as { conversionSource?: unknown }).conversionSource;
+    if (typeof bruto === 'string') ctwaClid = bruto;
+  }
+  if (!ctwaClid && typeof (ad as { ctwaClid?: unknown }).ctwaClid === 'string') {
+    ctwaClid = (ad as { ctwaClid?: string }).ctwaClid;
+  }
+
+  const limitar = (v: unknown, max: number) =>
+    typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined;
+
+  const dados = {
+    title: limitar(ad.title, 200),
+    body: limitar(ad.body, 200),
+    sourceUrl: limitar(ad.sourceUrl, 800),
+    sourceId: limitar(ad.sourceId, 120),
+    sourceType: limitar(ad.sourceType, 40),
+    ctwaClid: limitar(ctwaClid, 200),
+  };
+
+  // Um bloco sem nada aproveitavel nao vira campo no payload.
+  return Object.values(dados).some(Boolean) ? dados : null;
 }
 
 /** Dados da reacao, quando a mensagem for uma reacao. */
