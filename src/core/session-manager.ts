@@ -1826,6 +1826,12 @@ export class SessionManager {
     // — o mesmo problema que o mapa de LID resolve para mensagem.
     const numero = ev.callerPn ?? from;
     const tipo = ev.isVideo ? 'video' : 'voice';
+    // O evento de chamada do Baileys nao traz pushName. Quando o WhatsApp ja
+    // anunciou o contato via `contacts.upsert`/`contacts.update`, reutilizamos
+    // o nome conhecido para que o consumidor nao precise criar um contato
+    // identificado apenas pelo numero.
+    const callerPhone = phoneFromJid(numero);
+    const callerName = callerPhone ? this.contactName(live.name, callerPhone) : null;
 
     inc('call_total', live.name);
 
@@ -1881,6 +1887,9 @@ export class SessionManager {
       payload: {
         id: callId,
         from: toWahaChatId(numero),
+        // Best-effort: null e esperado para contatos cujo nome o WhatsApp ainda
+        // nao sincronizou. Nunca inferimos um nome a partir do numero.
+        notifyName: callerName,
         // `fromLid` explicito quando o id veio oculto: quem consome pode querer
         // resolver depois, e esconder isso faria o numero parecer inventado.
         fromLid: from.endsWith('@lid') ? from : null,

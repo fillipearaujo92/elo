@@ -85,11 +85,15 @@ export function registerContactRoutes(app: FastifyInstance, { sessions }: Deps):
       }
 
       const phone = (contactId.split('@')[0] ?? '').replace(/\D/g, '');
-      const lookup = await sessions.resolveLid(session, contactId).catch(() => null);
+      // Para um id de telefone nao ha LID a resolver. O nome ja foi aprendido
+      // pelos eventos `contacts.*` e fica no cache da sessao; consultar
+      // `resolveLid` com o telefone procurava, incorretamente, um LID igual ao
+      // telefone e devolvia sempre null.
+      const name = sessions.contactName(session, phone);
       return reply.send({
         id: { _serialized: `${phone}@c.us`, user: phone },
-        pushname: lookup?.pushName ?? null,
-        name: lookup?.pushName ?? null,
+        pushname: name,
+        name,
       });
     },
   );

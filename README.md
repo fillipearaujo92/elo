@@ -62,6 +62,7 @@ omnichannel system that can call a REST API and receive a webhook can use it.
 | **Survives restarts** | the pairing lives in Postgres — restarting does not ask for a new QR |
 | **Chat filters** | ignore groups, status/stories, channels, broadcast lists |
 | **Contact identity** | resolves the hidden id (LID) to the real phone number |
+| **Caller identity** | includes a known WhatsApp profile name in call webhooks, when available |
 | **Presence** | typing, recording, online/offline, last seen |
 | **Mark as read** | blue ticks, several messages in one call |
 | **Metrics** | Prometheus: message loss, failed ACKs, sessions down |
@@ -304,9 +305,30 @@ ELO `POST`s to your webhook with `{ event, session, payload }`:
 ```
 
 Events: `message` (incoming), `message.ack` (delivery/read receipt),
-`session.status` (connection), `presence.update` (the contact typing). When a
-message has media, `media.url` tells you where to download it. Failed deliveries
-are retried (15× every 2s by default, configurable); 4xx responses are not.
+`session.status` (connection), `presence.update` (the contact typing), and
+`call` (voice/video call state). When a message has media, `media.url` tells
+you where to download it. Failed deliveries are retried (15× every 2s by
+default, configurable); 4xx responses are not.
+
+**Call identity is best-effort.** WhatsApp does not put a profile name in its
+raw call event. If ELO has already learned that contact through the session's
+contact synchronization, a `call` payload also includes `notifyName`; otherwise
+it is `null` and consumers should show the phone number rather than inventing a
+name. For example:
+
+```json
+{
+  "event": "call",
+  "session": "support",
+  "payload": {
+    "id": "CALL_ID",
+    "from": "15551234567@c.us",
+    "notifyName": "Mary",
+    "type": "voice",
+    "status": "offer"
+  }
+}
+```
 
 `payload.id` is stable and works as an idempotency key — WhatsApp can redeliver
 the same event.

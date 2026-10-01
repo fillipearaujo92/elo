@@ -38,7 +38,7 @@ async function manager() {
     },
   };
   const sm = new SessionManager(pool as never, silent, webhooks as never, new MediaStore(silent));
-  return { call: sm as unknown as ComOnCall, emitidos };
+  return { call: sm as unknown as ComOnCall, manager: sm, emitidos };
 }
 
 /** Sessão viva mínima, com os campos que o onCall lê. */
@@ -112,6 +112,19 @@ describe('onCall: o que vai no payload', () => {
     const p = emitidos[0]!.payload;
     assert.match(String(p.from), /5585999998888/, 'o telefone tem de vencer o LID');
     assert.equal(p.fromLid, '80131355848789@lid', 'e o LID fica EXPOSTO, não escondido');
+  });
+
+  it('repassa o nome já sincronizado do chamador, sem inventar um nome', async () => {
+    const { call, manager: sessionManager, emitidos } = await manager();
+    // O Baileys não inclui pushName no evento de chamada. Ele chega antes nos
+    // eventos de contato e o gateway precisa reaproveitar esse dado conhecido.
+    const names = (sessionManager as unknown as {
+      contactNames: Map<string, string>;
+    }).contactNames;
+    names.set('canal:5585999998888', 'Maria');
+
+    await call.onCall(sessao(), { id: 'C5-name', from: DE, status: 'offer', date: new Date(0) });
+    assert.equal(emitidos[0]!.payload.notifyName, 'Maria');
   });
 
   it('`offline` viaja no payload (evento represado ≠ ligando agora)', async () => {
