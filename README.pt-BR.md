@@ -6,7 +6,7 @@
 
 [English](README.md) · **Português**
 
-Gateway WhatsApp auto-hospedado. Conecta um número via QR code e expõe uma **API REST** para enviar e receber mensagens, além de um **painel web** para operar as sessões.
+Gateway WhatsApp auto-hospedado. Conecta um número via QR code e expõe uma **API REST** para enviar mensagens, **webhooks** para receber, e um **painel web** para operar as sessões.
 
 Roda no seu servidor. O pareamento fica no seu Postgres — nenhum dado passa por serviço de terceiros.
 
@@ -15,11 +15,17 @@ seu sistema  ──HTTP──▶  ELO  ──▶  WhatsApp
              ◀─webhook──
 ```
 
-**Entra no lugar do WAHA.** O ELO fala o dialeto do WAHA de propósito: mesmos nomes de
-endpoint, mesmo formato de evento, mesmo vocabulário de sessão. Se a sua plataforma de
-chat já conversa com o WAHA, aponte para o ELO e funciona — sem driver novo, sem mudar
-código do seu lado. Qualquer sistema omnichannel que chame uma API REST e receba webhook
-pode usar.
+![Painel do ELO em tema escuro: lista de sessões com contadores por estado (no ar, aguardando QR, com falha, paradas), número pareado, estado e volume de mensagens de cada sessão](docs/imagens/painel-sessoes.webp)
+
+<details>
+<summary>Tema claro</summary>
+
+![A mesma lista de sessões do painel no tema claro](docs/imagens/painel-sessoes-claro.webp)
+
+</details>
+
+Qualquer sistema que chame uma API REST e receba webhook pode usar — veja
+[Compatibilidade](#compatibilidade) se você já integra com outro gateway.
 
 > ### ⚠️ Leia antes de usar
 >
@@ -86,11 +92,21 @@ Suba:
 docker compose up -d
 ```
 
-Abra <http://localhost:3000>, informe a `API_KEY` e crie a primeira sessão. Escaneie o QR pelo WhatsApp (**Aparelhos conectados → Conectar aparelho**).
+Abra <http://localhost:3000>, informe a `API_KEY` e crie a primeira sessão.
+
+![Tela de entrada do painel: marca dos dois elos, campo da chave de acesso e a telemetria pública do /health (engine e estado do gateway)](docs/imagens/painel-login.webp)
+
+Escaneie o QR pelo WhatsApp (**Aparelhos conectados → Conectar aparelho**). O anel em
+volta do código mostra quanto tempo falta para ele expirar; o painel troca o código
+sozinho quando o WhatsApp emite um novo.
+
+![Janela "conectar" de uma sessão: QR code com anel de contagem regressiva e o texto "código válido por 14s"](docs/imagens/painel-qr.webp)
 
 Depois de conectar, use **testar canal** no detalhe da sessão: ele envia uma mensagem
 e mostra a entrega progredindo (aceita → enviada → entregue → lida). É a diferença
 entre saber que o socket subiu e saber que a mensagem *chega*.
+
+![Janela "testar canal": número de destino, mensagem e a linha do tempo com os quatro passos marcados (aceita pelo gateway, enviada ao WhatsApp, entregue no aparelho, lida pelo contato) e o resultado "canal funcionando"](docs/imagens/painel-testar-canal.webp)
 
 > **A porta escuta em `127.0.0.1` por padrão** — o gateway não é alcançável por outras
 > máquinas até você permitir. A chave de API dá poder de enviar mensagem em nome do
@@ -312,6 +328,13 @@ Se o seu caso é plugar o ELO num sistema de atendimento próprio, o
 **[guia de integração](docs/INTEGRACAO.md)** cobre o caminho completo: subir,
 receber webhook (com as três regras que evitam mensagem duplicada), enviar,
 monitorar, e uma tabela de erros comuns com a causa de cada um.
+
+## Compatibilidade
+
+A API segue o formato de endpoints e eventos do [WAHA](https://waha.devlike.pro/)
+(nomes de rota, estados de sessão e o envelope `{ event, session, payload }` do
+webhook). Sistemas que já integram com ele funcionam apontando para o ELO: troque a
+URL base e a chave.
 
 ## Presença: parecer humano
 
